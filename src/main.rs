@@ -1,15 +1,16 @@
-use std::{env, fs, path::Path, process::exit};
-
-use log::info;
-use regex::Regex;
-
-use crate::cli::Action;
-
 mod cli;
+mod command;
 mod initialize_panic_handler;
+mod macros;
 
 fn main() -> color_eyre::Result<()> {
+  use std::{env, fs, path::Path, process::exit};
+
   use clap::Parser;
+  use log::info;
+  use regex::Regex;
+
+  use crate::cli::Action;
 
   initialize_panic_handler::initialize_panic_handler()?;
 
@@ -69,7 +70,7 @@ fn main() -> color_eyre::Result<()> {
     }
 
     if flake_attr.is_empty() {
-      flake_attr = cli::get_local_hostname().unwrap_or("darwinConfigurations".to_string());
+      flake_attr = cli::get_local_hostname()?;
     }
 
     flake_attr = format!("darwinConfigurations.{}", flake_attr);

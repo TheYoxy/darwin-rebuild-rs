@@ -1,8 +1,12 @@
 use std::{env, fs, os::unix::process::CommandExt, process::Command};
+use std::ffi::OsString;
 
 use clap::{command, Parser, Subcommand};
 use color_eyre::eyre::{bail, eyre};
+use log::{debug, info};
 use serde_json::Value;
+
+use crate::command::RunCommand;
 
 #[derive(Debug, Parser)]
 #[command(version, about, author, long_about = None)]
@@ -81,18 +85,25 @@ pub enum Action {
 }
 
 type Result<T> = color_eyre::Result<T>;
-pub fn get_local_hostname() -> Option<String> {
-  let output = Command::new("scutil").arg("--get").arg("LocalHostName").output().ok()?;
-  Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+/// Get the current hostname
+pub fn get_local_hostname() -> Result<String> {
+  info!("Getting local hostname");
+  let hostname = gethostname::gethostname().into_string().map_err(|e| eyre!("unable to get hostname: {e:?}"));
+
+  debug!("Local hostname: {hostname:?}");
+  hostname
 }
 
+/// Check if the nix command supports flake metadata
 pub fn nix_command_supports_flake_metadata(flake_flags: &[&str]) -> bool {
-  Command::new("nix").args(flake_flags).arg("flake").arg("metadata").arg("--version").output().is_ok()
+  debug!("checking if the nix command supports flakes");
+  Command::new("nix").args(flake_flags).arg("flake").arg("metadata").arg("--version").run_command().is_ok()
 }
 
 pub fn get_flake_metadata(
   flake_flags: &[&str], cmd: &str, extra_metadata_flags: &[String], extra_lock_flags: &[String], flake: &str,
 ) -> Result<Value> {
+  debug!("Getting flake metadata");
   let output = Command::new("nix")
     .args(flake_flags)
     .arg("flake")
@@ -102,13 +113,13 @@ pub fn get_flake_metadata(
     .args(extra_lock_flags)
     .arg("--")
     .arg(flake)
-    .output()?;
+    .run_command_with_output()?;
 
   serde_json::from_slice(&output.stdout).map_err(|e| e.into())
 }
 
 pub fn nix_instantiate_find_file(file: &str) -> Result<String> {
-  let output = Command::new("nix-instantiate").arg("--find-file").arg(file).output()?;
+  let output = Command::new("nix-instantiate").arg("--find-file").arg(file).run_command_with_output()?;
   Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
@@ -126,19 +137,22 @@ pub fn exec_nix_edit(
     .args(extra_lock_flags)
     .arg("--")
     .arg(format!("{}#{}", flake, flake_attr))
-    .output()?;
+    .run_command()?;
 
   Ok(())
 }
 
 pub fn nix_build(expression: &str, extra_build_flags: &[String], attr: &str) -> Result<String> {
-  let output = Command::new("nix-build").arg(expression).args(extra_build_flags).arg("-A").arg(attr).output()?;
+  debug!("Building the system configuration {expression} {extra_build_flags:?} {attr}");
+  let output =
+    Command::new("nix-build").arg(expression).args(extra_build_flags).arg("-A").arg(attr).run_command_with_output()?;
   Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
 pub fn nix_flake_build(
   flake_flags: &[&str], extra_build_flags: &[String], extra_lock_flags: &[String], flake: &str, flake_attr: &str,
 ) -> Result<String> {
+  debug!("Building the system configuration {flake} {flake_attr} {extra_build_flags:?} {extra_lock_flags:?}");
   let output = Command::new("nix")
     .args(flake_flags)
     .arg("build")
@@ -147,7 +161,7 @@ pub fn nix_flake_build(
     .args(extra_lock_flags)
     .arg("--")
     .arg(format!("{}#{}.system", flake, flake_attr))
-    .output()?;
+    .run_command_with_output()?;
 
   if output.status.success() {
     let json_output: Value = serde_json::from_slice(&output.stdout)?;
@@ -184,7 +198,7 @@ pub fn nix_env_profile(profile: &str, extra_profile_flags: &[String]) -> Result<
 }
 
 pub fn get_real_path(path: String) -> Result<String> {
-  let output = Command::new("readlink").arg("-f").arg(path).output()?;
+  let output = Command::new("readlink").arg("-f").arg(path).run_command_with_output()?;
   Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 

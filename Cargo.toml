@@ -8,6 +8,7 @@ description = ""
 better-panic = "0.3.0"
 clap = { version = "4.5.8", features = ["derive"] }
 color-eyre = "0.6.3"
+gethostname = "0.5.0"
 human-panic = "2.0.0"
 libc = "0.2.155"
 log = "0.4.22"
