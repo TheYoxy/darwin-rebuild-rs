@@ -1,7 +1,29 @@
-mod cli;
-mod command;
-mod initialize_panic_handler;
-mod macros;
+use crate::completion::generate_completion;
+
+pub mod cli;
+pub mod initialize_panic_handler;
+pub mod macros;
+pub mod nix_commands;
+
+pub(crate) mod completion {
+  use clap::CommandFactory;
+  use log::debug;
+
+  use crate::cli::{Cli, CompletionArgs};
+
+  fn print_completions<G: clap_complete::Generator>(gen: G, cmd: &mut clap::Command) {
+    use clap_complete::generate;
+    debug!("Generating completions for command: {:?}", cmd.get_name());
+    generate(gen, cmd, cmd.get_name().to_string(), &mut std::io::stdout());
+  }
+
+  pub(crate) fn generate_completion(completion: &CompletionArgs) -> color_eyre::Result<()> {
+    let mut cmd = Cli::command();
+    debug!("Generating completions for shell: {:?}", completion);
+    print_completions(completion.shell, &mut cmd);
+    Ok(())
+  }
+}
 
 fn main() -> color_eyre::Result<()> {
   use std::{env, fs, path::Path, process::exit};
@@ -17,6 +39,10 @@ fn main() -> color_eyre::Result<()> {
   #[cfg(debug_assertions)]
   pretty_env_logger::init();
   let args = cli::Cli::parse();
+
+  if let Action::Completions(shell) = args.action {
+    return generate_completion(&shell);
+  }
 
   let mut extra_metadata_flags = vec![];
   let mut extra_build_flags = vec![];
@@ -70,16 +96,17 @@ fn main() -> color_eyre::Result<()> {
     }
 
     if flake_attr.is_empty() {
-      flake_attr = cli::get_local_hostname()?;
+      flake_attr = nix_commands::get_local_hostname()?;
     }
 
     flake_attr = format!("darwinConfigurations.{}", flake_attr);
   }
 
   if let Some(flake_value) = &flake {
-    let cmd = if cli::nix_command_supports_flake_metadata(&flake_flags) { "metadata" } else { "info" };
+    let cmd = if nix_commands::nix_command_supports_flake_metadata(&flake_flags) { "metadata" } else { "info" };
 
-    let metadata = cli::get_flake_metadata(&flake_flags, cmd, &extra_metadata_flags, &extra_lock_flags, flake_value)?;
+    let metadata =
+      nix_commands::get_flake_metadata(&flake_flags, cmd, &extra_metadata_flags, &extra_lock_flags, flake_value)?;
     let flake_value = metadata["url"].as_str().unwrap().to_string();
 
     if metadata["resolved"]["submodules"].as_bool().unwrap_or(false) {
@@ -100,11 +127,11 @@ fn main() -> color_eyre::Result<()> {
   }
 
   if action == Action::Edit {
-    let darwin_config = cli::nix_instantiate_find_file("darwin-config")?;
+    let darwin_config = nix_commands::nix_instantiate_find_file("darwin-config")?;
     if let Some(flake) = &flake {
-      cli::exec_nix_edit(&flake_flags, &extra_lock_flags, flake, &flake_attr)?;
+      nix_commands::exec_nix_edit(&flake_flags, &extra_lock_flags, flake, &flake_attr)?;
     } else {
-      cli::exec_editor(&darwin_config);
+      nix_commands::exec_editor(&darwin_config);
     }
   }
 
@@ -112,17 +139,18 @@ fn main() -> color_eyre::Result<()> {
   if action == Action::Switch || action == Action::Build || action == Action::Check {
     info!("building the system configuration...");
     if let Some(flake) = &flake {
-      system_config = cli::nix_flake_build(&flake_flags, &extra_build_flags, &extra_lock_flags, flake, &flake_attr)?;
+      system_config =
+        nix_commands::nix_flake_build(&flake_flags, &extra_build_flags, &extra_lock_flags, flake, &flake_attr)?;
     } else {
-      system_config = cli::nix_build("<darwin>", &extra_build_flags, "system")?;
+      system_config = nix_commands::nix_build("<darwin>", &extra_build_flags, "system")?;
     }
   }
 
   if action == Action::List || action == Action::Rollback {
-    if !cli::is_root_user() && !cli::is_read_only(&profile)? {
-      cli::sudo_nix_env_profile(&profile, &extra_profile_flags)?;
+    if !nix_commands::is_root_user() && !nix_commands::is_read_only(&profile)? {
+      nix_commands::sudo_nix_env_profile(&profile, &extra_profile_flags)?;
     } else {
-      cli::nix_env_profile(&profile, &extra_profile_flags)?;
+      nix_commands::nix_env_profile(&profile, &extra_profile_flags)?;
     }
   }
 
@@ -131,7 +159,7 @@ fn main() -> color_eyre::Result<()> {
   }
 
   if action == Action::Activate {
-    system_config = cli::get_real_path(env::args().next().unwrap().replace("/sw/bin/darwin-rebuild", ""))?;
+    system_config = nix_commands::get_real_path(env::args().next().unwrap().replace("/sw/bin/darwin-rebuild", ""))?;
   }
 
   if system_config.is_empty() {
@@ -139,32 +167,32 @@ fn main() -> color_eyre::Result<()> {
   }
 
   if action == Action::Switch {
-    if !cli::is_root_user() && !cli::is_read_only(&profile)? {
-      cli::sudo_nix_env_set_profile(&profile, &system_config)?;
+    if !nix_commands::is_root_user() && !nix_commands::is_read_only(&profile)? {
+      nix_commands::sudo_nix_env_set_profile(&profile, &system_config)?;
     } else {
-      cli::nix_env_set_profile(&profile, &system_config)?;
+      nix_commands::nix_env_set_profile(&profile, &system_config)?;
     }
   }
 
   if action == Action::Switch || action == Action::Activate || action == Action::Rollback {
-    cli::exec_activate_user(&system_config)?;
-    if !cli::is_root_user() {
-      cli::sudo_exec_activate(&system_config)?;
+    nix_commands::exec_activate_user(&system_config)?;
+    if !nix_commands::is_root_user() {
+      nix_commands::sudo_exec_activate(&system_config)?;
     } else {
-      cli::exec_activate(&system_config)?;
+      nix_commands::exec_activate(&system_config)?;
     }
   }
 
   if action == Action::Changelog {
     info!("\nCHANGELOG\n");
-    cli::print_changelog(&system_config)?;
+    nix_commands::print_changelog(&system_config)?;
   }
 
   if action == Action::Check {
     unsafe {
       env::set_var("checkActivation", "1");
     }
-    cli::exec_activate_user(&system_config)?;
+    nix_commands::exec_activate_user(&system_config)?;
   }
 
   Ok(())
