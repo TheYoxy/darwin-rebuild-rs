@@ -1,5 +1,7 @@
 use std::{
-  env, fs,
+  env,
+  ffi::OsStr,
+  fs,
   os::unix::process::CommandExt,
   process::{Command, Output},
 };
@@ -12,7 +14,7 @@ use log::{debug, error, info, trace};
 use serde_json::Value;
 use subprocess::{Exec, Redirection};
 
-use crate::print_bool;
+use crate::{print_bool, DEFAULT_PROFILE};
 
 type Result<T> = color_eyre::Result<T>;
 
@@ -84,15 +86,27 @@ pub fn get_local_hostname() -> Result<String> {
 }
 
 /// Check if the nix command supports flake metadata
-pub fn nix_command_supports_flake_metadata(flake_flags: &[&str]) -> bool {
+pub fn nix_command_supports_flake_metadata<I, S>(flake_flags: I) -> bool
+where
+  I: IntoIterator<Item = S>,
+  S: AsRef<OsStr>,
+{
   debug!("checking if the nix command supports flakes");
   Command::new("nix").args(flake_flags).arg("flake").arg("metadata").arg("--version").run_command().is_ok()
 }
 
-pub fn get_flake_metadata(
-  flake_flags: &[&str], cmd: &str, extra_metadata_flags: &[String], extra_lock_flags: &[String], flake: &str,
-) -> Result<Value> {
-  debug!("Getting flake metadata");
+pub fn get_flake_metadata<FlakeFlags, Cmd, MetadataFlags, ExtraLockFlags, Flake>(
+  flake_flags: &[FlakeFlags], cmd: Cmd, extra_metadata_flags: &[MetadataFlags], extra_lock_flags: &[ExtraLockFlags],
+  flake: Flake,
+) -> Result<Value>
+where
+  FlakeFlags: AsRef<OsStr> + std::fmt::Debug,
+  Cmd: AsRef<OsStr> + std::fmt::Debug,
+  MetadataFlags: AsRef<OsStr> + std::fmt::Debug,
+  ExtraLockFlags: AsRef<OsStr> + std::fmt::Debug,
+  Flake: AsRef<OsStr> + std::fmt::Debug,
+{
+  debug!("Getting flake metadata {flake:?} {cmd:?} {extra_metadata_flags:?} {extra_lock_flags:?}");
   let output = Command::new("nix")
     .args(flake_flags)
     .arg("flake")
@@ -139,16 +153,27 @@ pub fn nix_build(expression: &str, extra_build_flags: &[String], attr: &str) -> 
 }
 
 pub fn nix_flake_build(
-  flake_flags: &[&str], extra_build_flags: &[String], extra_lock_flags: &[String], flake: &str, flake_attr: &str,
+  flake_flags: &[&str],
+  extra_build_flags: &[String],
+  extra_lock_flags: &[String],
+  flake: &str,
+  flake_attr: &str,
 ) -> Result<String> {
   debug!("Building the system configuration {flake} {flake_attr} {extra_build_flags:?} {extra_lock_flags:?}");
   let nom = true;
   if nom {
+    let out_dir = tempfile::Builder::new().prefix("nix-darwin-").tempdir()?;
+    let out_link = out_dir.path().join("result");
+    let out_link_str = out_link.to_str().unwrap();
+    debug!("out_dir: {:?}", out_dir);
+    debug!("out_link: {:?}", out_link);
+
     let cmd = {
       Exec::cmd("nix")
         .args(flake_flags)
         .arg("build")
         .args(&["--log-format", "internal-json", "--verbose"])
+        .args(&["--out-link", out_link_str])
         .args(extra_build_flags)
         .args(extra_lock_flags)
         .arg("--")
@@ -162,7 +187,11 @@ pub fn nix_flake_build(
     debug!("Cmd: {:?}", cmd);
     let result = cmd.join()?;
     debug!("result: {:?}", result);
-    Ok("".to_string())
+
+    debug!("nvd diff {DEFAULT_PROFILE} {out_link_str}");
+    Exec::cmd("nvd").args(&["diff", DEFAULT_PROFILE, out_link_str]).join()?;
+
+    Ok(out_link_str.to_string())
   } else {
     let output = Command::new("nix")
       .args(flake_flags)
@@ -184,14 +213,19 @@ pub fn nix_flake_build(
   }
 }
 
-pub fn is_root_user() -> bool { env::var("USER").unwrap() == "root" }
+pub fn is_root_user() -> bool {
+  debug!("Checking if the user is root");
+  env::var("USER").unwrap() == "root"
+}
 
 pub fn is_read_only(path: &str) -> Result<bool> {
+  debug!("Checking if {path} is read-only");
   let metadata = fs::metadata(path)?;
   Ok(metadata.permissions().readonly())
 }
 
 pub fn sudo_nix_env_profile(profile: &str, extra_profile_flags: &[String]) -> Result<()> {
+  info!("Running sudo nix-env -p {profile} {extra_profile_flags:?}");
   let status = Command::new("sudo").arg("nix-env").arg("-p").arg(profile).args(extra_profile_flags).status()?;
   if status.success() {
     Ok(())
@@ -201,6 +235,7 @@ pub fn sudo_nix_env_profile(profile: &str, extra_profile_flags: &[String]) -> Re
 }
 
 pub fn nix_env_profile(profile: &str, extra_profile_flags: &[String]) -> Result<()> {
+  info!("Running nix-env -p {profile} {extra_profile_flags:?}");
   let status = Command::new("nix-env").arg("-p").arg(profile).args(extra_profile_flags).status()?;
   if status.success() {
     Ok(())
@@ -210,8 +245,9 @@ pub fn nix_env_profile(profile: &str, extra_profile_flags: &[String]) -> Result<
 }
 
 pub fn get_real_path(path: String) -> Result<String> {
-  let output = Command::new("readlink").arg("-f").arg(path).run_command_with_output()?;
-  Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+  use std::{fs, path::Path};
+  let canonical_path = fs::canonicalize(Path::new(&path))?;
+  canonical_path.to_str().ok_or(eyre!("unable to get the real path of {path}")).map(|e| e.to_string())
 }
 
 pub fn sudo_nix_env_set_profile(profile: &str, system_config: &str) -> Result<()> {
@@ -226,6 +262,7 @@ pub fn sudo_nix_env_set_profile(profile: &str, system_config: &str) -> Result<()
 
 pub fn nix_env_set_profile(profile: &str, system_config: &str) -> Result<()> {
   let status = Command::new("nix-env").arg("-p").arg(profile).arg("--set").arg(system_config).status()?;
+
   if status.success() {
     Ok(())
   } else {
@@ -244,6 +281,7 @@ pub fn exec_activate_user(system_config: &str) -> Result<()> {
 
 pub fn sudo_exec_activate(system_config: &str) -> Result<()> {
   let status = Command::new("sudo").arg(format!("{}/activate", system_config)).status()?;
+
   if status.success() {
     Ok(())
   } else {
@@ -253,6 +291,7 @@ pub fn sudo_exec_activate(system_config: &str) -> Result<()> {
 
 pub fn exec_activate(system_config: &str) -> Result<()> {
   let status = Command::new(format!("{}/activate", system_config)).status()?;
+
   if status.success() {
     Ok(())
   } else {

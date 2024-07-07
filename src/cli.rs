@@ -67,6 +67,7 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug, Eq, PartialEq)]
 pub enum Action {
+  #[clap()]
   List,
   Rollback,
   Edit,

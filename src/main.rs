@@ -1,3 +1,7 @@
+use color_eyre::owo_colors::OwoColorize;
+use log::{debug, info};
+use serde_json::to_string;
+
 use crate::completion::generate_completion;
 
 pub mod cli;
@@ -24,6 +28,8 @@ pub(crate) mod completion {
     Ok(())
   }
 }
+
+const DEFAULT_PROFILE: &'static str = "/nix/var/nix/profiles/system";
 
 fn main() -> color_eyre::Result<()> {
   use std::{env, fs, path::Path, process::exit};
@@ -54,11 +60,13 @@ fn main() -> color_eyre::Result<()> {
       fs::create_dir_all(Path::new(&profile).parent().unwrap()).unwrap();
       profile
     } else {
-      env::var("profile").unwrap_or("@profile@".to_string())
+      env::var("profile").unwrap_or(DEFAULT_PROFILE.to_string())
     }
   } else {
-    env::var("profile").unwrap_or("@profile@".to_string())
+    env::var("profile").unwrap_or(DEFAULT_PROFILE.to_string())
   };
+
+  info!("Current profile: {}", profile.yellow());
   let action = if args.rollback {
     extra_profile_flags.push("--rollback".to_string());
     Action::Rollback
@@ -68,7 +76,6 @@ fn main() -> color_eyre::Result<()> {
   } else {
     args.action
   };
-  let mut flake = args.flake;
 
   for value in [args.max_jobs, args.cores, args.update_input, args.substituters].into_iter().flatten() {
     extra_build_flags.push(value.clone());
@@ -81,42 +88,46 @@ fn main() -> color_eyre::Result<()> {
   }
 
   let flake_flags = vec!["--extra-experimental-features", "nix-command flakes"];
-  let mut flake_attr = "".to_string();
 
-  if let Some(flake_value) = &flake {
+  let (flake, flake_attr) = if let Some(flake_value) = &args.flake {
+    debug!("Looking for flake metadata... {flake_value}");
     let re = Regex::new(r"^(([^:/?#]+):)?(//([^/?#]*))?([^?#]*)(\?([^#]*))?(#(.*))?").unwrap();
-    if let Some(caps) = re.captures(flake_value) {
+
+    let (flake, flake_attr) = if let Some(caps) = re.captures(flake_value) {
       let scheme = if let Some(r) = caps.get(1) { r.as_str() } else { "" };
       let authority = if let Some(e) = caps.get(3) { e.as_str() } else { "" };
       let path = if let Some(e) = caps.get(5) { e.as_str() } else { "" };
       let query_with_question = if let Some(e) = caps.get(6) { e.as_str() } else { "" };
-      flake_attr = if let Some(e) = caps.get(9) { e.as_str().to_string() } else { "".to_string() };
+      let flake_attr =
+        if let Some(e) = caps.get(9) { e.as_str().to_string() } else { nix_commands::get_local_hostname()? };
+      let flake_value = format!("{}{}{}{}", scheme, authority, path, query_with_question);
+      let cmd = if nix_commands::nix_command_supports_flake_metadata(&flake_flags) { "metadata" } else { "info" };
 
-      flake = Some(format!("{}{}{}{}", scheme, authority, path, query_with_question));
-    }
-
-    if flake_attr.is_empty() {
-      flake_attr = nix_commands::get_local_hostname()?;
-    }
-
-    flake_attr = format!("darwinConfigurations.{}", flake_attr);
-  }
-
-  if let Some(flake_value) = &flake {
-    let cmd = if nix_commands::nix_command_supports_flake_metadata(&flake_flags) { "metadata" } else { "info" };
-
-    let metadata =
-      nix_commands::get_flake_metadata(&flake_flags, cmd, &extra_metadata_flags, &extra_lock_flags, flake_value)?;
-    let flake_value = metadata["url"].as_str().unwrap().to_string();
-
-    if metadata["resolved"]["submodules"].as_bool().unwrap_or(false) {
-      if flake_value.contains('?') {
-        flake = Some(format!("{}&submodules=1", flake_value));
+      let metadata =
+        nix_commands::get_flake_metadata(&flake_flags, cmd, &extra_metadata_flags, &extra_lock_flags, flake_value)?;
+      debug!("url: {:?}", metadata["url"].blue());
+      let flake_value = metadata["url"].as_str().unwrap().to_string();
+      debug!("flake_value: {:?}", flake_value.blue());
+      let flake = if metadata["resolved"]["submodules"].as_bool().unwrap_or(false) {
+        if flake_value.contains('?') {
+          Some(format!("{}&submodules=1", flake_value))
+        } else {
+          Some(format!("{}?submodules=1", flake_value))
+        }
       } else {
-        flake = Some(format!("{}?submodules=1", flake_value));
-      }
-    }
-  }
+        Some(flake_value)
+      };
+      debug!("flake: {:?}", flake.blue());
+
+      (flake, flake_attr)
+    } else {
+      (None, "".to_string())
+    };
+
+    (flake, format!("darwinConfigurations.{}", flake_attr))
+  } else {
+    (None, "".to_string())
+  };
 
   if action != Action::Build {
     if flake.is_some() {
@@ -136,10 +147,11 @@ fn main() -> color_eyre::Result<()> {
   }
 
   let mut system_config = if action == Action::Switch || action == Action::Build || action == Action::Check {
-    info!("building the system configuration...");
     if let Some(flake) = &flake {
+      info!("building the system configuration from {flake}...");
       nix_commands::nix_flake_build(&flake_flags, &extra_build_flags, &extra_lock_flags, flake, &flake_attr)
     } else {
+      info!("building the system configuration from <darwin>...");
       nix_commands::nix_build("<darwin>", &extra_build_flags, "system")
     }?
   } else {
@@ -163,22 +175,27 @@ fn main() -> color_eyre::Result<()> {
   }
 
   if system_config.is_empty() {
-    exit(0);
+    panic!("Unable to define the system configuration");
   }
 
   if action == Action::Switch {
     if !nix_commands::is_root_user() && !nix_commands::is_read_only(&profile)? {
+      info!("setting the profile as root...");
       nix_commands::sudo_nix_env_set_profile(&profile, &system_config)?;
     } else {
+      info!("setting the profile...");
       nix_commands::nix_env_set_profile(&profile, &system_config)?;
     }
   }
 
   if action == Action::Switch || action == Action::Activate || action == Action::Rollback {
+    info!("activating user profile...");
     nix_commands::exec_activate_user(&system_config)?;
     if !nix_commands::is_root_user() {
+      info!("activating system as root...");
       nix_commands::sudo_exec_activate(&system_config)?;
     } else {
+      info!("activating system...");
       nix_commands::exec_activate(&system_config)?;
     }
   }
