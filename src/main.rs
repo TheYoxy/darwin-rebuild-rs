@@ -135,16 +135,16 @@ fn main() -> color_eyre::Result<()> {
     }
   }
 
-  let mut system_config = "".to_string();
-  if action == Action::Switch || action == Action::Build || action == Action::Check {
+  let mut system_config = if action == Action::Switch || action == Action::Build || action == Action::Check {
     info!("building the system configuration...");
     if let Some(flake) = &flake {
-      system_config =
-        nix_commands::nix_flake_build(&flake_flags, &extra_build_flags, &extra_lock_flags, flake, &flake_attr)?;
+      nix_commands::nix_flake_build(&flake_flags, &extra_build_flags, &extra_lock_flags, flake, &flake_attr)
     } else {
-      system_config = nix_commands::nix_build("<darwin>", &extra_build_flags, "system")?;
-    }
-  }
+      nix_commands::nix_build("<darwin>", &extra_build_flags, "system")
+    }?
+  } else {
+    "".to_string()
+  };
 
   if action == Action::List || action == Action::Rollback {
     if !nix_commands::is_root_user() && !nix_commands::is_read_only(&profile)? {

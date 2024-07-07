@@ -10,6 +10,7 @@ use color_eyre::{
 };
 use log::{debug, error, info, trace};
 use serde_json::Value;
+use subprocess::{Exec, Redirection};
 
 use crate::print_bool;
 
@@ -141,22 +142,45 @@ pub fn nix_flake_build(
   flake_flags: &[&str], extra_build_flags: &[String], extra_lock_flags: &[String], flake: &str, flake_attr: &str,
 ) -> Result<String> {
   debug!("Building the system configuration {flake} {flake_attr} {extra_build_flags:?} {extra_lock_flags:?}");
-  let output = Command::new("nix")
-    .args(flake_flags)
-    .arg("build")
-    .arg("--json")
-    .args(extra_build_flags)
-    .args(extra_lock_flags)
-    .arg("--")
-    .arg(format!("{}#{}.system", flake, flake_attr))
-    .run_command_with_output()?;
+  let nom = true;
+  if nom {
+    let cmd = {
+      Exec::cmd("nix")
+        .args(flake_flags)
+        .arg("build")
+        .args(&["--log-format", "internal-json", "--verbose"])
+        .args(extra_build_flags)
+        .args(extra_lock_flags)
+        .arg("--")
+        .arg(format!("{}#{}.system", flake, flake_attr))
+        .stdout(Redirection::Pipe)
+        .stderr(Redirection::Merge)
+        | Exec::cmd("nom").args(&["--json"])
+    }
+    .stdout(Redirection::None);
 
-  if output.status.success() {
-    let json_output: Value = serde_json::from_slice(&output.stdout)?;
-
-    json_output[0]["outputs"]["out"].as_str().map(|a| a.to_string()).ok_or(eyre!("unable to get output"))
+    debug!("Cmd: {:?}", cmd);
+    let result = cmd.join()?;
+    debug!("result: {:?}", result);
+    Ok("".to_string())
   } else {
-    bail!("Failed to run nix build: {}", String::from_utf8_lossy(&output.stderr).trim())
+    let output = Command::new("nix")
+      .args(flake_flags)
+      .arg("build")
+      .arg("--json")
+      .args(extra_build_flags)
+      .args(extra_lock_flags)
+      .arg("--")
+      .arg(format!("{}#{}.system", flake, flake_attr))
+      .run_command_with_output()?;
+
+    if output.status.success() {
+      let json_output: Value = serde_json::from_slice(&output.stdout)?;
+
+      json_output[0]["outputs"]["out"].as_str().map(|a| a.to_string()).ok_or(eyre!("unable to get output"))
+    } else {
+      bail!("Failed to run nix build: {}", String::from_utf8_lossy(&output.stderr).trim())
+    }
   }
 }
 
