@@ -3,6 +3,7 @@ use std::{
   ffi::OsStr,
   fs,
   os::unix::process::CommandExt,
+  path::Path,
   process::{Command, Output},
 };
 
@@ -95,25 +96,22 @@ where
   Command::new("nix").args(flake_flags).arg("flake").arg("metadata").arg("--version").run_command().is_ok()
 }
 
-pub fn get_flake_metadata<FlakeFlags, Cmd, MetadataFlags, ExtraLockFlags, Flake>(
-  flake_flags: &[FlakeFlags], cmd: Cmd, extra_metadata_flags: &[MetadataFlags], extra_lock_flags: &[ExtraLockFlags],
-  flake: Flake,
+pub fn get_flake_metadata<FlakeFlags, Cmd, MetadataFlags, Flake>(
+  flake_flags: &[FlakeFlags], cmd: Cmd, extra_metadata_flags: &[MetadataFlags], flake: Flake,
 ) -> Result<Value>
 where
   FlakeFlags: AsRef<OsStr> + std::fmt::Debug,
   Cmd: AsRef<OsStr> + std::fmt::Debug,
   MetadataFlags: AsRef<OsStr> + std::fmt::Debug,
-  ExtraLockFlags: AsRef<OsStr> + std::fmt::Debug,
   Flake: AsRef<OsStr> + std::fmt::Debug,
 {
-  debug!("Getting flake metadata {flake:?} {cmd:?} {extra_metadata_flags:?} {extra_lock_flags:?}");
+  debug!("Getting flake metadata {flake:?} {cmd:?} {extra_metadata_flags:?}");
   let output = Command::new("nix")
     .args(flake_flags)
     .arg("flake")
     .arg(cmd)
     .arg("--json")
     .args(extra_metadata_flags)
-    .args(extra_lock_flags)
     .arg("--")
     .arg(flake)
     .run_command_with_output()?;
@@ -121,61 +119,89 @@ where
   serde_json::from_slice(&output.stdout).map_err(|e| e.into())
 }
 
-pub fn nix_instantiate_find_file(file: &str) -> Result<String> {
+pub fn nix_instantiate_find_file<File>(file: File) -> Result<String>
+where
+  File: AsRef<OsStr> + std::fmt::Debug,
+{
+  debug!("Finding file {file:?}");
   let output = Command::new("nix-instantiate").arg("--find-file").arg(file).run_command_with_output()?;
   Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-pub fn exec_editor(file: &str) {
+pub fn exec_editor<File>(file: File)
+where
+  File: AsRef<OsStr> + std::fmt::Debug,
+{
   let editor = env::var("EDITOR").unwrap_or("vi".to_string());
   Command::new(editor).arg(file).exec_command();
 }
 
-pub fn exec_nix_edit(
-  flake_flags: &[&str], extra_lock_flags: &[String], flake: &String, flake_attr: &str,
-) -> Result<()> {
-  Command::new("nix")
-    .args(flake_flags)
-    .arg("edit")
-    .args(extra_lock_flags)
-    .arg("--")
-    .arg(format!("{}#{}", flake, flake_attr))
-    .run_command()?;
+pub fn exec_nix_edit<Flake, FlakeAttr, FlakeFlags, FlakeFlagsItems>(
+  flake: Flake, flake_attr: FlakeAttr, flake_flags: FlakeFlags,
+) -> Result<()>
+where
+  Flake: AsRef<OsStr> + std::fmt::Display,
+  FlakeAttr: AsRef<OsStr> + std::fmt::Display,
+  FlakeFlags: IntoIterator<Item = FlakeFlagsItems> + std::fmt::Debug,
+  FlakeFlagsItems: AsRef<OsStr>,
+{
+  debug!("editing flake {flake} {flake_attr} {flake_flags:?}");
+  Command::new("nix").args(flake_flags).arg("edit").arg("--").arg(format!("{}#{}", flake, flake_attr)).run_command()?;
 
   Ok(())
 }
 
-pub fn nix_build(expression: &str, extra_build_flags: &[String], attr: &str) -> Result<String> {
-  debug!("Building the system configuration {expression} {extra_build_flags:?} {attr}");
-  let output =
-    Command::new("nix-build").arg(expression).args(extra_build_flags).arg("-A").arg(attr).run_command_with_output()?;
+pub fn nix_build<Exp, Attr, BuildFlags, OutDir, BuildFlagsItems>(
+  expression: Exp, attr: Attr, out_dir: OutDir, extra_build_flags: BuildFlags,
+) -> Result<String>
+where
+  Exp: AsRef<OsStr> + std::fmt::Display,
+  Attr: AsRef<OsStr> + std::fmt::Display,
+  OutDir: AsRef<str> + std::fmt::Display,
+  BuildFlags: IntoIterator<Item = BuildFlagsItems> + std::fmt::Debug,
+  BuildFlagsItems: AsRef<OsStr>,
+{
+  debug!("Building the system configuration {expression} {attr} {extra_build_flags:?}");
+
+  let args = vec!["--out-link", out_dir.as_ref()];
+  let output = Command::new("nix-build")
+    .arg(expression)
+    .args(extra_build_flags)
+    .args(&args)
+    .arg("-A")
+    .arg(attr)
+    .run_command_with_output()?;
   Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-pub fn nix_flake_build(
-  flake_flags: &[&str],
-  extra_build_flags: &[String],
-  extra_lock_flags: &[String],
-  flake: &str,
-  flake_attr: &str,
-) -> Result<String> {
-  debug!("Building the system configuration {flake} {flake_attr} {extra_build_flags:?} {extra_lock_flags:?}");
+pub fn nix_flake_build<Flake, FlakeAttr, FlakeFlagsItems, OutDir, BuildFlagsItems>(
+  flake: Flake, flake_attr: FlakeAttr, flake_flags: &[FlakeFlagsItems], out_dir: OutDir,
+  extra_build_flags: &[BuildFlagsItems],
+) -> Result<String>
+where
+  Flake: AsRef<OsStr> + std::fmt::Display,
+  FlakeAttr: AsRef<OsStr> + std::fmt::Display,
+  OutDir: AsRef<str> + std::fmt::Display + Into<String>,
+  FlakeFlagsItems: AsRef<OsStr> + std::fmt::Debug,
+  BuildFlagsItems: AsRef<OsStr> + std::fmt::Debug,
+{
+  debug!(
+    "Building the system configuration {} {} {:?} {:?}",
+    flake.blue(),
+    flake_attr.yellow(),
+    flake_flags.cyan(),
+    extra_build_flags.blue()
+  );
   let nom = true;
   if nom {
-    let out_dir = tempfile::Builder::new().prefix("nix-darwin-").tempdir()?;
-    let out_link = out_dir.path().join("result");
-    let out_link_str = out_link.to_str().unwrap();
-    debug!("out_dir: {:?}", out_dir);
-    debug!("out_link: {:?}", out_link);
-
+    let args = vec!["--out-link", out_dir.as_ref()];
     let cmd = {
       Exec::cmd("nix")
         .args(flake_flags)
         .arg("build")
-        .args(&["--log-format", "internal-json", "--verbose"])
-        .args(&["--out-link", out_link_str])
+        .args(&["--log-format", "internal-json", "-v"])
+        .args(&args)
         .args(extra_build_flags)
-        .args(extra_lock_flags)
         .arg("--")
         .arg(format!("{}#{}.system", flake, flake_attr))
         .stdout(Redirection::Pipe)
@@ -188,17 +214,17 @@ pub fn nix_flake_build(
     let result = cmd.join()?;
     debug!("result: {:?}", result);
 
-    debug!("nvd diff {DEFAULT_PROFILE} {out_link_str}");
-    Exec::cmd("nvd").args(&["diff", DEFAULT_PROFILE, out_link_str]).join()?;
+    Exec::cmd("ls").args(&["-l", out_dir.as_ref()]).join()?;
+    debug!("nvd diff {DEFAULT_PROFILE} {out_dir}");
+    Exec::cmd("nvd").args(&["diff", DEFAULT_PROFILE, out_dir.as_ref()]).join()?;
 
-    Ok(out_link_str.to_string())
+    Ok(out_dir.into())
   } else {
     let output = Command::new("nix")
       .args(flake_flags)
       .arg("build")
       .arg("--json")
       .args(extra_build_flags)
-      .args(extra_lock_flags)
       .arg("--")
       .arg(format!("{}#{}.system", flake, flake_attr))
       .run_command_with_output()?;
@@ -218,13 +244,22 @@ pub fn is_root_user() -> bool {
   env::var("USER").unwrap() == "root"
 }
 
-pub fn is_read_only(path: &str) -> Result<bool> {
-  debug!("Checking if {path} is read-only");
-  let metadata = fs::metadata(path)?;
-  Ok(metadata.permissions().readonly())
+pub fn is_read_only<P: AsRef<Path> + std::fmt::Display>(path: P) -> Result<bool> {
+  debug!("Checking if {} is read-only", path.yellow());
+  let metadata = fs::metadata(&path)?;
+  let is_read_only = metadata.permissions().readonly();
+  debug!("Is {} read-only: {}", path.yellow(), print_bool!(is_read_only, "readonly", "write allowed"));
+  Ok(is_read_only)
 }
 
-pub fn sudo_nix_env_profile(profile: &str, extra_profile_flags: &[String]) -> Result<()> {
+pub fn sudo_nix_env_profile<Profile, ExtraProfileFlags, ExtraProfileFlagsItems>(
+  profile: Profile, extra_profile_flags: ExtraProfileFlags,
+) -> Result<()>
+where
+  Profile: AsRef<OsStr> + std::fmt::Display,
+  ExtraProfileFlags: IntoIterator<Item = ExtraProfileFlagsItems> + std::fmt::Debug,
+  ExtraProfileFlagsItems: AsRef<OsStr>,
+{
   info!("Running sudo nix-env -p {profile} {extra_profile_flags:?}");
   let status = Command::new("sudo").arg("nix-env").arg("-p").arg(profile).args(extra_profile_flags).status()?;
   if status.success() {
@@ -234,7 +269,14 @@ pub fn sudo_nix_env_profile(profile: &str, extra_profile_flags: &[String]) -> Re
   }
 }
 
-pub fn nix_env_profile(profile: &str, extra_profile_flags: &[String]) -> Result<()> {
+pub fn nix_env_profile<Profile, ExtraProfileFlags, ExtraProfileFlagsItems>(
+  profile: Profile, extra_profile_flags: ExtraProfileFlags,
+) -> Result<()>
+where
+  Profile: AsRef<OsStr> + std::fmt::Display,
+  ExtraProfileFlags: IntoIterator<Item = ExtraProfileFlagsItems> + std::fmt::Debug,
+  ExtraProfileFlagsItems: AsRef<OsStr>,
+{
   info!("Running nix-env -p {profile} {extra_profile_flags:?}");
   let status = Command::new("nix-env").arg("-p").arg(profile).args(extra_profile_flags).status()?;
   if status.success() {
@@ -244,13 +286,17 @@ pub fn nix_env_profile(profile: &str, extra_profile_flags: &[String]) -> Result<
   }
 }
 
-pub fn get_real_path(path: String) -> Result<String> {
-  use std::{fs, path::Path};
-  let canonical_path = fs::canonicalize(Path::new(&path))?;
-  canonical_path.to_str().ok_or(eyre!("unable to get the real path of {path}")).map(|e| e.to_string())
+pub fn get_real_path<S: AsRef<Path> + std::fmt::Debug>(path: S) -> Result<String> {
+  let canonical_path = std::fs::canonicalize(&path)?;
+  canonical_path.to_str().ok_or(eyre!("unable to get the real path of {path:?}")).map(|e| e.to_string())
 }
 
-pub fn sudo_nix_env_set_profile(profile: &str, system_config: &str) -> Result<()> {
+pub fn sudo_nix_env_set_profile<Profile, SystemConfig>(profile: Profile, system_config: SystemConfig) -> Result<()>
+where
+  Profile: AsRef<OsStr> + std::fmt::Display,
+  SystemConfig: AsRef<OsStr> + std::fmt::Display,
+{
+  info!("Running {}", format!("sudo nix-env -p {} --set {}", profile.yellow(), system_config.blue()));
   let status = Command::new("sudo").arg("nix-env").arg("-p").arg(profile).arg("--set").arg(system_config).status()?;
 
   if status.success() {
@@ -260,7 +306,11 @@ pub fn sudo_nix_env_set_profile(profile: &str, system_config: &str) -> Result<()
   }
 }
 
-pub fn nix_env_set_profile(profile: &str, system_config: &str) -> Result<()> {
+pub fn nix_env_set_profile<Profile, SystemConfig>(profile: Profile, system_config: SystemConfig) -> Result<()>
+where
+  Profile: AsRef<OsStr> + std::fmt::Display,
+  SystemConfig: AsRef<OsStr> + std::fmt::Display,
+{
   let status = Command::new("nix-env").arg("-p").arg(profile).arg("--set").arg(system_config).status()?;
 
   if status.success() {
@@ -270,7 +320,10 @@ pub fn nix_env_set_profile(profile: &str, system_config: &str) -> Result<()> {
   }
 }
 
-pub fn exec_activate_user(system_config: &str) -> Result<()> {
+pub fn exec_activate_user<SystemConfig>(system_config: SystemConfig) -> Result<()>
+where
+  SystemConfig: AsRef<OsStr> + std::fmt::Display,
+{
   let status = Command::new(format!("{}/activate-user", system_config)).status()?;
   if status.success() {
     Ok(())
@@ -279,7 +332,10 @@ pub fn exec_activate_user(system_config: &str) -> Result<()> {
   }
 }
 
-pub fn sudo_exec_activate(system_config: &str) -> Result<()> {
+pub fn sudo_exec_activate<SystemConfig>(system_config: SystemConfig) -> Result<()>
+where
+  SystemConfig: AsRef<OsStr> + std::fmt::Display,
+{
   let status = Command::new("sudo").arg(format!("{}/activate", system_config)).status()?;
 
   if status.success() {
@@ -289,7 +345,10 @@ pub fn sudo_exec_activate(system_config: &str) -> Result<()> {
   }
 }
 
-pub fn exec_activate(system_config: &str) -> Result<()> {
+pub fn exec_activate<SystemConfig>(system_config: SystemConfig) -> Result<()>
+where
+  SystemConfig: AsRef<OsStr> + std::fmt::Display,
+{
   let status = Command::new(format!("{}/activate", system_config)).status()?;
 
   if status.success() {
@@ -299,8 +358,13 @@ pub fn exec_activate(system_config: &str) -> Result<()> {
   }
 }
 
-pub fn print_changelog(system_config: &str) -> Result<()> {
-  let changelog = fs::read_to_string(format!("{}/darwin-changes", system_config))?;
+pub fn print_changelog<SystemConfig>(system_config: SystemConfig) -> Result<()>
+where
+  SystemConfig: AsRef<OsStr> + std::fmt::Display,
+{
+  let file = format!("{}/darwin-changes", system_config);
+  debug!("Printing changelog for {}", file.yellow());
+  let changelog = fs::read_to_string(file)?;
   let lines: Vec<&str> = changelog.lines().take(32).collect();
   for line in lines {
     println!("{}", line);

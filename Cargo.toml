@@ -6,7 +6,7 @@ description = ""
 
 [dependencies]
 better-panic = "0.3.0"
-clap = { version = "4.5.8", features = ["color", "derive"] }
+clap = { version = "4.5.8", features = ["color", "derive", "env"] }
 clap_complete = "4"
 color-eyre = "0.6.3"
 gethostname = "0.5.0"

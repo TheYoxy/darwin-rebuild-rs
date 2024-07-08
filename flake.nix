@@ -43,6 +43,8 @@
                 libiconv
                 pkg-config
                 rustToolchain
+                nix-output-monitor
+                nvd
               ]
               ++ p;
           };

@@ -1,7 +1,7 @@
 use clap::{command, Args, Parser, Subcommand};
 use clap_complete::Shell;
 
-#[derive(Debug, Parser)]
+#[derive(Default, Debug, Parser)]
 #[command(version, about, author, long_about = None)]
 pub struct Cli {
   /// The command to execute
@@ -49,7 +49,7 @@ pub struct Cli {
   #[arg(long, number_of_values = 2)]
   pub argstr: Option<Vec<String>>,
   /// Flake
-  #[arg(long)]
+  #[arg(short, long, env = "FLAKE", value_hint = clap::ValueHint::DirPath)]
   pub flake: Option<String>,
   /// Update input
   #[arg(long)]
@@ -65,22 +65,20 @@ pub struct Cli {
   pub substituters: Option<String>,
 }
 
-#[derive(Subcommand, Debug, Eq, PartialEq)]
+#[derive(Subcommand, Default, Debug, Eq, PartialEq, Clone, Copy)]
 pub enum Action {
-  #[clap()]
-  List,
-  Rollback,
-  Edit,
-  Switch,
-  Activate,
+  #[default]
   Build,
   Check,
+  Switch,
+  Edit,
+  Activate,
   Changelog,
   #[clap(value_enum)]
   Completions(CompletionArgs),
 }
 
-#[derive(Args, Debug, Eq, PartialEq)]
+#[derive(Args, Debug, Eq, PartialEq, Clone, Copy)]
 pub struct CompletionArgs {
   /// The shell to generate the completion script for
   pub shell: Shell,
