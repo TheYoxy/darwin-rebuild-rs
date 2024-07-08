@@ -181,7 +181,7 @@ impl Runnable for BuildRunner {
         let extra_profile_flags = vec!["--rollback"];
         run_profile(&self.profile, &extra_profile_flags)?;
         let system_config = fs::read_to_string(format!("{}/systemConfig", self.profile)).unwrap();
-        activate_profile(system_config)
+        activate_profile(&system_config)
       },
       BuildArgsAction::List => {
         let extra_profile_flags = vec!["--list-generations"];
@@ -198,7 +198,7 @@ impl Runnable for BuildRunner {
       },
       BuildArgsAction::Activate => {
         let system_config = nix_commands::get_real_path(args().next().unwrap().replace("/sw/bin/darwin-rebuild", ""))?;
-        activate_profile(system_config)
+        activate_profile(&system_config)
       },
       BuildArgsAction::Build => {
         build_configuration(&self.flake, &self.flake_attr, &self.flake_flags, &out_link_str, &self.extra_build_flags)?;
@@ -235,7 +235,7 @@ impl Runnable for BuildRunner {
         }
 
         switch_profile(&system_config, &self.profile)?;
-        activate_profile(system_config)
+        activate_profile(&system_config)
       },
       BuildArgsAction::Changelog => {
         info!("\nCHANGELOG\n");
@@ -248,9 +248,13 @@ impl Runnable for BuildRunner {
   }
 }
 
-fn switch_profile(system_config: &str, profile: &str) -> color_eyre::Result<()> {
+fn switch_profile<SystemConfig, Profile>(system_config: SystemConfig, profile: Profile) -> color_eyre::Result<()>
+where
+  Profile: AsRef<Path> + std::fmt::Display + std::convert::AsRef<std::ffi::OsStr>,
+  SystemConfig: std::convert::AsRef<std::ffi::OsStr> + std::fmt::Display,
+{
   let is_root_user = nix_commands::is_root_user();
-  let is_read_only = nix_commands::is_read_only(profile)?;
+  let is_read_only = nix_commands::is_read_only(&profile)?;
   debug!("Is root user: {} is ro {}", print_bool!(is_root_user), print_bool!(is_read_only));
   if !is_root_user && is_read_only {
     info!("setting the profile as root...");
@@ -282,15 +286,18 @@ where
   }
 }
 
-fn activate_profile(system_config: String) -> color_eyre::Result<()> {
+fn activate_profile<SystemConfig>(system_config: &SystemConfig) -> color_eyre::Result<()>
+where
+  SystemConfig: std::fmt::Display,
+{
   info!("activating user profile...");
-  nix_commands::exec_activate_user(system_config.clone())?;
+  nix_commands::exec_activate_user(&system_config)?;
   if !nix_commands::is_root_user() {
     info!("activating system as root...");
-    nix_commands::sudo_exec_activate(system_config)?;
+    nix_commands::sudo_exec_activate(&system_config)?;
   } else {
     info!("activating system...");
-    nix_commands::exec_activate(system_config)?;
+    nix_commands::exec_activate(&system_config)?;
   }
   Ok(())
 }

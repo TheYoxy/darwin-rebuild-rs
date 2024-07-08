@@ -4,7 +4,7 @@ use std::{
   fs,
   os::unix::process::CommandExt,
   path::Path,
-  process::{Command, Output},
+  process::{Command, ExitStatus, Output},
 };
 
 use color_eyre::{
@@ -35,6 +35,7 @@ pub trait RunCommand {
   fn exec_command(&mut self) -> std::io::Error;
   fn run_command(&mut self) -> color_eyre::Result<()>;
   fn run_command_with_output(&mut self) -> color_eyre::Result<Output>;
+  fn status_command(&mut self) -> color_eyre::Result<ExitStatus>;
 }
 
 impl RunCommand for Command {
@@ -50,6 +51,12 @@ impl RunCommand for Command {
   }
 
   fn run_command_with_output(&mut self) -> color_eyre::Result<Output> { handle_output_result(self) }
+
+  fn status_command(&mut self) -> color_eyre::Result<ExitStatus> {
+    let command_call = self.get_command();
+    debug!("Running {command_call}");
+    self.status().map_err(|e| e.into())
+  }
 }
 
 fn handle_output_result(command: &mut Command) -> color_eyre::Result<Output> {
@@ -244,9 +251,9 @@ pub fn is_root_user() -> bool {
   env::var("USER").unwrap() == "root"
 }
 
-pub fn is_read_only<P: AsRef<Path> + std::fmt::Display>(path: P) -> Result<bool> {
+pub fn is_read_only<P: AsRef<Path> + std::fmt::Display>(path: &P) -> Result<bool> {
   debug!("Checking if {} is read-only", path.yellow());
-  let metadata = fs::metadata(&path)?;
+  let metadata = fs::metadata(path)?;
   let is_read_only = metadata.permissions().readonly();
   debug!("Is {} read-only: {}", path.yellow(), print_bool!(is_read_only, "readonly", "write allowed"));
   Ok(is_read_only)
@@ -261,7 +268,7 @@ where
   ExtraProfileFlagsItems: AsRef<OsStr>,
 {
   info!("Running sudo nix-env -p {profile} {extra_profile_flags:?}");
-  let status = Command::new("sudo").arg("nix-env").arg("-p").arg(profile).args(extra_profile_flags).status()?;
+  let status = Command::new("sudo").arg("nix-env").arg("-p").arg(profile).args(extra_profile_flags).status_command()?;
   if status.success() {
     Ok(())
   } else {
@@ -278,7 +285,7 @@ where
   ExtraProfileFlagsItems: AsRef<OsStr>,
 {
   info!("Running nix-env -p {profile} {extra_profile_flags:?}");
-  let status = Command::new("nix-env").arg("-p").arg(profile).args(extra_profile_flags).status()?;
+  let status = Command::new("nix-env").arg("-p").arg(profile).args(extra_profile_flags).status_command()?;
   if status.success() {
     Ok(())
   } else {
@@ -297,7 +304,8 @@ where
   SystemConfig: AsRef<OsStr> + std::fmt::Display,
 {
   info!("Running {}", format!("sudo nix-env -p {} --set {}", profile.yellow(), system_config.blue()));
-  let status = Command::new("sudo").arg("nix-env").arg("-p").arg(profile).arg("--set").arg(system_config).status()?;
+  let status =
+    Command::new("sudo").arg("nix-env").arg("-p").arg(profile).arg("--set").arg(system_config).status_command()?;
 
   if status.success() {
     Ok(())
@@ -311,7 +319,7 @@ where
   Profile: AsRef<OsStr> + std::fmt::Display,
   SystemConfig: AsRef<OsStr> + std::fmt::Display,
 {
-  let status = Command::new("nix-env").arg("-p").arg(profile).arg("--set").arg(system_config).status()?;
+  let status = Command::new("nix-env").arg("-p").arg(profile).arg("--set").arg(system_config).status_command()?;
 
   if status.success() {
     Ok(())
@@ -320,11 +328,11 @@ where
   }
 }
 
-pub fn exec_activate_user<SystemConfig>(system_config: SystemConfig) -> Result<()>
+pub fn exec_activate_user<SystemConfig>(system_config: &SystemConfig) -> Result<()>
 where
-  SystemConfig: AsRef<OsStr> + std::fmt::Display,
+  SystemConfig: std::fmt::Display,
 {
-  let status = Command::new(format!("{}/activate-user", system_config)).status()?;
+  let status = Command::new(format!("{}/activate-user", system_config)).status_command()?;
   if status.success() {
     Ok(())
   } else {
@@ -332,11 +340,11 @@ where
   }
 }
 
-pub fn sudo_exec_activate<SystemConfig>(system_config: SystemConfig) -> Result<()>
+pub fn sudo_exec_activate<SystemConfig>(system_config: &SystemConfig) -> Result<()>
 where
-  SystemConfig: AsRef<OsStr> + std::fmt::Display,
+  SystemConfig: std::fmt::Display,
 {
-  let status = Command::new("sudo").arg(format!("{}/activate", system_config)).status()?;
+  let status = Command::new("sudo").arg(format!("{}/activate", system_config)).status_command()?;
 
   if status.success() {
     Ok(())
@@ -345,11 +353,11 @@ where
   }
 }
 
-pub fn exec_activate<SystemConfig>(system_config: SystemConfig) -> Result<()>
+pub fn exec_activate<SystemConfig>(system_config: &SystemConfig) -> Result<()>
 where
-  SystemConfig: AsRef<OsStr> + std::fmt::Display,
+  SystemConfig: std::fmt::Display,
 {
-  let status = Command::new(format!("{}/activate", system_config)).status()?;
+  let status = Command::new(format!("{}/activate", system_config)).status_command()?;
 
   if status.success() {
     Ok(())
@@ -360,7 +368,7 @@ where
 
 pub fn print_changelog<SystemConfig>(system_config: SystemConfig) -> Result<()>
 where
-  SystemConfig: AsRef<OsStr> + std::fmt::Display,
+  SystemConfig: std::fmt::Display,
 {
   let file = format!("{}/darwin-changes", system_config);
   debug!("Printing changelog for {}", file.yellow());
