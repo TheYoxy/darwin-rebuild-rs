@@ -51,13 +51,13 @@
       };
 
       packages = let
-        lib = pkgs.lib;
-        package = (lib.importTOML ./Cargo.toml).package;
+        inherit (pkgs) lib;
+        inherit (lib.importTOML ./Cargo.toml) package;
         rev = self.shortRev or self.dirtyShortRev or "dirty";
         use-nom = true;
         runtimeDeps = [pkgs.nvd] ++ lib.optionals use-nom [pkgs.nix-output-monitor];
       in rec {
-        ymsp =
+        darwin-rebuild =
           rustPlatform
           .buildRustPackage {
             pname = package.name;
@@ -111,7 +111,7 @@
               ];
             };
           };
-        default = ymsp;
+        default = darwin-rebuild;
       };
     });
 }

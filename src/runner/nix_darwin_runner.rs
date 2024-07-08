@@ -107,7 +107,19 @@ impl NixDarwinRunner {
         }
         .to_owned();
         debug!("flake_value: {:?}", flake_value.blue());
-        let flake = match metadata["resolved"]["submodules"] {
+        let flake = match &metadata["resolved"]["submodules"] {
+          serde_json::Value::String(str) => {
+            let value: bool = str.parse()?;
+            if value {
+              if flake_value.contains('?') {
+                format!("{}&submodules=1", flake_value)
+              } else {
+                format!("{}?submodules=1", flake_value)
+              }
+            } else {
+              flake_value
+            }
+          },
           serde_json::Value::Bool(true) => {
             if flake_value.contains('?') {
               format!("{}&submodules=1", flake_value)
@@ -116,7 +128,8 @@ impl NixDarwinRunner {
             }
           },
           serde_json::Value::Bool(false) => flake_value,
-          _ => bail!("submodules is not a boolean"),
+          serde_json::Value::Null => flake_value,
+          val => bail!("submodules is not a boolean {}", val.red().bold()),
         };
         debug!("flake: {:?}", flake.blue());
 
@@ -219,8 +232,35 @@ pub(crate) mod completion {
 
 #[cfg(test)]
 mod tests {
+  use pretty_assertions::assert_str_eq;
+
   use super::*;
   use crate::{cli::CompletionArgs, runner::runnable::Runnable};
+
+  #[test_log::test]
+  fn test_parse_profile_without_profile() -> color_eyre::Result<()> {
+    let profile = None;
+    let result = NixDarwinRunner::parse_profile(&profile)?;
+    assert_str_eq!(result, DEFAULT_PROFILE);
+    Ok(())
+  }
+
+  #[test_log::test]
+  fn test_parse_profile_with_system() -> color_eyre::Result<()> {
+    let profile = Some("system".to_string());
+    let result = NixDarwinRunner::parse_profile(&profile)?;
+    assert_str_eq!(result, DEFAULT_PROFILE);
+    Ok(())
+  }
+
+  #[should_panic]
+  #[test_log::test]
+  fn test_parse_profile_with_other() {
+    let profile = Some("other".to_string());
+    let result = NixDarwinRunner::parse_profile(&profile).unwrap();
+    assert_str_eq!(result, format!("/nix/var/nix/profiles/system-profiles/{}", profile.unwrap()));
+  }
+
   #[test_log::test]
   fn can_run_completions() {
     fn run_completions(shell: clap_complete::Shell) -> color_eyre::Result<()> {
