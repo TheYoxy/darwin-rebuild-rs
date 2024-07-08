@@ -3,7 +3,7 @@ allow-expect-in-tests = true
 allow-unwrap-in-tests = true
 allow-dbg-in-tests = true
 disallowed-methods = [
-    "std::result::Result::expect",
+    { path = "std::result::Result::expect", reason = "prefer `unwrap` for legibility" },
     { path = "std::option::Option::map_or", reason = "prefer `map(..).unwrap_or(..)` for legibility" },
     { path = "std::option::Option::map_or_else", reason = "prefer `map(..).unwrap_or_else(..)` for legibility" },
     { path = "std::result::Result::map_or", reason = "prefer `map(..).unwrap_or(..)` for legibility" },

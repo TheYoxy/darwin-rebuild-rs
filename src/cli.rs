@@ -2,13 +2,10 @@ use anstyle::Style;
 use clap::{builder::Styles, command, Args, Parser, Subcommand};
 use clap_complete::Shell;
 
-
 fn make_style() -> Styles {
-    Styles::plain().header(Style::new().bold()).literal(
-        Style::new()
-            .bold()
-            .fg_color(Some(anstyle::Color::Ansi(anstyle::AnsiColor::Yellow))),
-    )
+  Styles::plain()
+    .header(Style::new().bold())
+    .literal(Style::new().bold().fg_color(Some(anstyle::Color::Ansi(anstyle::AnsiColor::Yellow))))
 }
 
 #[derive(Default, Debug, Parser)]
@@ -16,67 +13,26 @@ fn make_style() -> Styles {
 pub struct Cli {
   /// The command to execute
   #[command(subcommand)]
-  pub action: Action,
+  pub action: Option<Action>,
   /// List generations
-  #[arg(long)]
+  #[arg(long, global = true, conflicts_with("rollback"))]
   pub list_generations: bool,
-  /// Profile name
-  #[arg(short, long)]
-  pub profile_name: Option<String>,
   /// Rollback
-  #[arg(long)]
+  #[arg(long, global = true, conflicts_with("list_generations"))]
   pub rollback: bool,
-  /// Switch generation
-  #[arg(short = 'G', long)]
-  pub switch_generation: Option<String>,
-  /// Max jobs
-  #[arg(short, long)]
-  pub max_jobs: Option<String>,
-  /// Cores
-  #[arg(long)]
-  pub cores: Option<String>,
-  /// Dry run
-  #[arg(long)]
-  pub dry_run: bool,
-  /// Keep going
-  #[arg(short, long)]
-  pub keep_going: bool,
-  /// Keep failed
-  #[arg(short = 'K', long)]
-  pub keep_failed: bool,
-  /// Fallback
-  #[arg(long)]
-  pub fallback: bool,
-  /// Show trace
-  #[arg(long)]
-  pub show_trace: bool,
-  /// Option
-  #[arg(long, number_of_values = 2)]
-  pub option: Option<Vec<String>>,
-  /// Arg
-  #[arg(long, number_of_values = 2)]
-  pub arg: Option<Vec<String>>,
-  #[arg(long, number_of_values = 2)]
-  pub argstr: Option<Vec<String>>,
+  /// Profile name
+  #[arg(short, long, global = true)]
+  pub profile_name: Option<String>,
   /// Flake
-  #[arg(short, long, env = "FLAKE", value_hint = clap::ValueHint::DirPath)]
+  #[arg(short, long, env = "FLAKE", global = true, value_hint = clap::ValueHint::DirPath)]
   pub flake: Option<String>,
-  /// Update input
-  #[arg(long)]
-  pub update_input: Option<String>,
-  /// Override input
-  #[arg(long, number_of_values = 2)]
-  pub override_input: Option<Vec<String>>,
-  /// Offline
-  #[arg(long)]
-  pub offline: bool,
-  /// Substituters
-  #[arg(long)]
-  pub substituters: Option<String>,
   /// Show debug logs
   #[arg(long, short, global = true)]
   pub verbose: bool,
 }
+
+#[derive(Args, Debug, Eq, PartialEq, Clone, Copy)]
+pub struct BuildArgs {}
 
 #[derive(Subcommand, Default, Debug, Eq, PartialEq, Clone, Copy)]
 pub enum Action {
@@ -95,4 +51,27 @@ pub enum Action {
 pub struct CompletionArgs {
   /// The shell to generate the completion script for
   pub shell: Shell,
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  const APP_NAME: &str = env!("CARGO_BIN_NAME");
+  #[test_log::test]
+  fn should_parse_cli_build() {
+    use clap::Parser;
+    let cli = Cli::parse_from([APP_NAME, "build", "--verbose"]);
+    assert!(cli.verbose);
+    assert_eq!(cli.action, Some(Action::Build));
+  }
+
+  #[test_log::test]
+  fn should_parse_cli() {
+    use clap::Parser;
+    let cli = Cli::parse_from([APP_NAME, "--list-generations"]);
+    assert!(!cli.verbose);
+    assert_eq!(cli.action, None);
+    assert!(cli.list_generations);
+  }
 }

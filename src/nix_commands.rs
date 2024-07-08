@@ -94,23 +94,22 @@ pub fn get_local_hostname() -> Result<String> {
 }
 
 /// Check if the nix command supports flake metadata
-pub fn nix_command_supports_flake_metadata<I, S>(flake_flags: I) -> bool
+pub fn nix_command_supports_flake_metadata<S>(flake_flags: &[S]) -> bool
 where
-  I: IntoIterator<Item = S>,
   S: AsRef<OsStr>,
 {
   debug!("checking if the nix command supports flakes");
   Command::new("nix").args(flake_flags).arg("flake").arg("metadata").arg("--version").run_command().is_ok()
 }
 
-pub fn get_flake_metadata<FlakeFlags, Cmd, MetadataFlags, Flake>(
-  flake_flags: &[FlakeFlags], cmd: Cmd, extra_metadata_flags: &[MetadataFlags], flake: Flake,
+pub fn get_flake_metadata<Flake, Cmd, FlakeFlags, MetadataFlags>(
+  flake: Flake, cmd: Cmd, flake_flags: &[FlakeFlags], extra_metadata_flags: &[MetadataFlags],
 ) -> Result<Value>
 where
-  FlakeFlags: AsRef<OsStr> + std::fmt::Debug,
-  Cmd: AsRef<OsStr> + std::fmt::Debug,
-  MetadataFlags: AsRef<OsStr> + std::fmt::Debug,
   Flake: AsRef<OsStr> + std::fmt::Debug,
+  Cmd: AsRef<OsStr> + std::fmt::Debug,
+  FlakeFlags: AsRef<OsStr> + std::fmt::Debug,
+  MetadataFlags: AsRef<OsStr> + std::fmt::Debug,
 {
   debug!("Getting flake metadata {flake:?} {cmd:?} {extra_metadata_flags:?}");
   let output = Command::new("nix")
@@ -246,9 +245,10 @@ where
   }
 }
 
-pub fn is_root_user() -> bool {
-  debug!("Checking if the user is root");
-  env::var("USER").unwrap() == "root"
+pub fn is_root_user() -> Result<bool> {
+  const USERNAME: &str = "root";
+  debug!("Checking if the user is {}", USERNAME.bold().yellow());
+  Ok(env::var("USER").map_err(|e| eyre!("Unable to get user from env variables {}", e.red()))? == USERNAME)
 }
 
 pub fn is_read_only<P: AsRef<Path> + std::fmt::Display>(path: &P) -> Result<bool> {

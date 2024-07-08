@@ -256,7 +256,6 @@ dependencies = [
  "color-eyre",
  "gethostname",
  "human-panic",
- "libc",
  "log",
  "mockall",
  "predicates",
