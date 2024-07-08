@@ -1,8 +1,18 @@
-use clap::{command, Args, Parser, Subcommand};
+use anstyle::Style;
+use clap::{builder::Styles, command, Args, Parser, Subcommand};
 use clap_complete::Shell;
 
+
+fn make_style() -> Styles {
+    Styles::plain().header(Style::new().bold()).literal(
+        Style::new()
+            .bold()
+            .fg_color(Some(anstyle::Color::Ansi(anstyle::AnsiColor::Yellow))),
+    )
+}
+
 #[derive(Default, Debug, Parser)]
-#[command(version, about, author, long_about = None)]
+#[command(version, about, author, long_about = None, styles=make_style())]
 pub struct Cli {
   /// The command to execute
   #[command(subcommand)]
@@ -63,6 +73,9 @@ pub struct Cli {
   /// Substituters
   #[arg(long)]
   pub substituters: Option<String>,
+  /// Show debug logs
+  #[arg(long, short, global = true)]
+  pub verbose: bool,
 }
 
 #[derive(Subcommand, Default, Debug, Eq, PartialEq, Clone, Copy)]

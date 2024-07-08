@@ -3,6 +3,9 @@ pub mod cli;
 pub mod initialize_panic_handler;
 pub mod macros;
 pub mod nix_commands;
+#[cfg_attr(debug_assertions, path = "logging_debug.rs")]
+#[cfg_attr(not(debug_assertions), path = "logging.rs")]
+pub mod logging;
 
 const DEFAULT_PROFILE: &str = "/nix/var/nix/profiles/system";
 
@@ -12,9 +15,8 @@ fn main() -> color_eyre::Result<()> {
 
   initialize_panic_handler::initialize_panic_handler()?;
 
-  #[cfg(debug_assertions)]
-  pretty_env_logger::init();
   let args = cli::Cli::parse();
+  logging::setup_logging(args.verbose)?;
 
   let build_args = BuildRunner::new(&args);
   build_args.run()
