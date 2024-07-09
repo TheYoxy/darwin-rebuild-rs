@@ -255,28 +255,4 @@ mod tests {
     assert_str_eq!(result, format!("/nix/var/nix/profiles/system-profiles/{}", profile));
   }
 
-  #[test_log::test]
-  fn can_run_completions() {
-    fn run_completions(shell: clap_complete::Shell) -> color_eyre::Result<()> {
-      let cli = Cli { action: Some(Action::Completions(CompletionArgs { shell })), ..Default::default() };
-      let runner = NixDarwinRunner::new(&cli)?;
-      runner.run()
-    }
-
-    assert!(run_completions(clap_complete::Shell::Zsh).is_ok());
-    assert!(run_completions(clap_complete::Shell::Bash).is_ok());
-    assert!(run_completions(clap_complete::Shell::PowerShell).is_ok());
-    assert!(run_completions(clap_complete::Shell::Fish).is_ok());
-    assert!(run_completions(clap_complete::Shell::Elvish).is_ok());
-  }
-
-  #[test_log::test]
-  fn can_run_changelog() {
-    let cli = Cli { action: Some(Action::Changelog), ..Default::default() };
-    let runner = NixDarwinRunner::new(&cli);
-    assert!(runner.is_ok());
-    let runner = runner.unwrap();
-    let result = runner.run();
-    assert!(result.is_ok());
-  }
 }

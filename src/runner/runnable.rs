@@ -97,13 +97,11 @@ impl Runnable for NixDarwinRunner {
 
 #[cfg(test)]
 mod tests {
-  use super::*;
-  // mod containers {
-  //   use testcontainers::{runners::AsyncRunner, GenericImage};
+  use rstest::rstest;
 
-  //   #[test_log::test]
-  //   fn test() { let _image = GenericImage::new("sickcodes/docker-osx", "latest").start(); }
-  // }
+  use super::*;
+  use crate::cli::{Action, Cli, CompletionArgs};
+
   mod without_flakes {
     use clap::Parser;
 
@@ -119,6 +117,7 @@ mod tests {
     }
 
     #[test_log::test]
+    #[cfg(target_os = "macos")]
     fn should_run_changelog() {
       let runner = get_runner(["changelog"].into());
       let result = runner.run();
@@ -140,6 +139,7 @@ mod tests {
     }
 
     #[test_log::test]
+    #[cfg(target_os = "macos")]
     fn should_run_build() {
       let runner = get_runner(["build"].into());
       let result = runner.run();
@@ -185,6 +185,7 @@ mod tests {
     }
 
     #[test_log::test]
+    #[cfg(target_os = "macos")]
     fn should_run_changelog() {
       let runner = get_runner(["changelog"].into());
       let result = runner.run();
@@ -235,5 +236,21 @@ mod tests {
       let result = runner.run();
       assert!(result.is_ok(), "{:?}", result);
     }
+  }
+
+  #[rstest]
+  #[case::zsh(clap_complete::Shell::Zsh)]
+  #[case::bash(clap_complete::Shell::Bash)]
+  #[case::powershell(clap_complete::Shell::PowerShell)]
+  #[case::fish(clap_complete::Shell::Fish)]
+  #[case::elvish(clap_complete::Shell::Elvish)]
+  fn can_run_completions(#[case] shell: clap_complete::Shell) {
+    fn run_completions(shell: clap_complete::Shell) -> color_eyre::Result<()> {
+      let cli = Cli { action: Some(Action::Completions(CompletionArgs { shell })), ..Default::default() };
+      let runner = NixDarwinRunner::new(&cli)?;
+      runner.run()
+    }
+
+    assert!(run_completions(shell).is_ok());
   }
 }

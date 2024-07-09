@@ -13,6 +13,7 @@
   inputs = {
     # nixpkgs-darwin.url = "github:nixos/nixpkgs/nixpkgs-unstable";
     nixpkgs-darwin.url = "github:nixos/nixpkgs/nixpkgs-24.05-darwin";
+    flake-utils.url = "github:numtide/flake-utils";
     darwin = {
       url = "github:lnl7/nix-darwin";
       inputs.nixpkgs.follows = "nixpkgs-darwin";
@@ -28,11 +29,11 @@
     self,
     nixpkgs,
     darwin,
+    flake-utils,
     ...
   }: let
     # TODO replace with your own username, system and hostname
     username = "darwin";
-    system = "aarch64-darwin"; # aarch64-darwin or x86_64-darwin
     hostname = "darwin-rebuild-rs";
 
     specialArgs =
@@ -40,12 +41,16 @@
       // {
         inherit username hostname;
       };
-  in {
-    darwinConfigurations."${hostname}" = darwin.lib.darwinSystem {
-      inherit system specialArgs;
-      modules = [];
+  in
+    flake-utils.lib.eachDefaultSystem (system: {
+      # nix code formatter
+      formatter.${system} = nixpkgs.legacyPackages.${system}.alejandra;
+    })
+    // {
+      darwinConfigurations."${hostname}" = darwin.lib.darwinSystem {
+        inherit specialArgs;
+        system = "x86_64-linux";
+        modules = [];
+      };
     };
-    # nix code formatter
-    formatter.${system} = nixpkgs.legacyPackages.${system}.alejandra;
-  };
 }

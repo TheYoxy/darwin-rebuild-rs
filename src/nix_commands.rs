@@ -5,7 +5,7 @@ use color_eyre::{
   owo_colors::OwoColorize,
   Section, SectionExt,
 };
-use log::{debug, info, trace};
+use log::{debug, error, info, trace};
 use serde_json::Value;
 use subprocess::{Exec, Redirection};
 use tracing::debug_span;
@@ -192,7 +192,8 @@ where
       .args(&extra_build_flags)
       .arg("--")
       .arg(format!("{}#{}.system", flake, flake_attr))
-      .stdout(Redirection::None)
+      .stdout(Redirection::Pipe)
+      .stderr(Redirection::Pipe)
       .capture()?;
 
     if output.exit_status.success() {
@@ -205,11 +206,15 @@ where
         }),
       )
     } else {
-      let stderr = String::from_utf8_lossy(&output.stderr);
-      Err(eyre!("Failed to run nix build")).with_section(|| stderr.to_string().header("stderr: "))
+      let stdout = String::from_utf8_lossy(&output.stdout).to_string().header("stdout: ");
+      error!("Stdout: {}", stdout);
+      let stderr = String::from_utf8_lossy(&output.stderr).to_string().header("stderr: ");
+      error!("Stderr: {}", stderr);
+      Err(eyre!("Failed to run nix build")).with_section(|| stderr)
     }
   }
 }
+
 pub fn is_root_user() -> Result<bool> {
   const USERNAME: &str = "root";
   debug!("Checking if the user is {}", USERNAME.bold().yellow());

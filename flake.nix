@@ -31,7 +31,7 @@
         cargo = pkgs.rustToolchain;
         rustc = pkgs.rustToolchain;
       };
-      p = builtins.map (f: f.override {inherit rustPlatform;}) (with pkgs; [cargo-watch]);
+      p = builtins.map (f: f.override {inherit rustPlatform;}) (with pkgs; []);
     in {
       formatter = pkgs.alejandra;
 
