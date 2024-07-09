@@ -40,7 +40,7 @@ impl Runnable for NixDarwinRunner {
       bail!("No action specified")
     };
 
-    info!("Running action: {:?}", action.bold().purple());
+    info!("Starting action: {:?}", action.bold().purple());
     let result = match action {
       NixDarwinAction::Rollback => {
         let extra_profile_flags = vec!["--rollback"];
@@ -55,10 +55,9 @@ impl Runnable for NixDarwinRunner {
       NixDarwinAction::Edit => {
         let darwin_config = nix_commands::nix_instantiate_find_file("darwin-config")?;
         if let Some(flake) = &self.flake {
-          nix_commands::exec_nix_edit(flake, &self.flake_attr, &self.flake_flags)
+          nix_commands::nix_edit(flake, &self.flake_attr, &self.flake_flags)
         } else {
-          nix_commands::exec_editor(&darwin_config);
-          Ok(())
+          nix_commands::exec_editor(&darwin_config)
         }
       },
       NixDarwinAction::Activate => {

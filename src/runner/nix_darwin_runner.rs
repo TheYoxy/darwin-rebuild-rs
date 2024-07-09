@@ -172,12 +172,11 @@ impl NixDarwinRunner {
     Ok(())
   }
 
-  pub(super) fn run_profile<ExtraProfileFlags, ExtraProfileFlagsItems>(
-    &self, extra_profile_flags: ExtraProfileFlags,
+  pub(super) fn run_profile<ExtraProfileFlagsItems>(
+    &self, extra_profile_flags: &[ExtraProfileFlagsItems],
   ) -> color_eyre::Result<()>
   where
-    ExtraProfileFlags: IntoIterator<Item = ExtraProfileFlagsItems> + Debug,
-    ExtraProfileFlagsItems: AsRef<OsStr>,
+    ExtraProfileFlagsItems: AsRef<OsStr> + std::fmt::Debug,
   {
     let profile = &self.profile;
     let is_root_user = nix_commands::is_root_user()?;

@@ -1,17 +1,10 @@
-use std::{
-  env,
-  ffi::OsStr,
-  fs,
-  os::unix::process::CommandExt,
-  path::Path,
-  process::{Command, ExitStatus, Output},
-};
+use std::{env, ffi::OsStr, fs, path::Path};
 
 use color_eyre::{
   eyre::{bail, eyre},
   owo_colors::OwoColorize,
 };
-use log::{debug, error, info, trace};
+use log::{debug, info};
 use serde_json::Value;
 use subprocess::{Exec, Redirection};
 
@@ -19,75 +12,12 @@ use crate::{print_bool, DEFAULT_PROFILE};
 
 type Result<T> = color_eyre::Result<T>;
 
-trait GetCommand {
-  fn get_command(&self) -> String;
-}
-
-impl GetCommand for Command {
-  fn get_command(&self) -> String {
-    let args = self.get_args().filter_map(|a| a.to_str()).collect::<Vec<_>>().join(" ");
-    format!("{} {}", self.get_program().to_str().unwrap().yellow(), args.bright_yellow())
-  }
-}
-
-#[cfg_attr(test, mockall::automock)]
-pub trait RunCommand {
-  fn exec_command(&mut self) -> std::io::Error;
-  fn run_command(&mut self) -> color_eyre::Result<()>;
-  fn run_command_with_output(&mut self) -> color_eyre::Result<Output>;
-  fn status_command(&mut self) -> color_eyre::Result<ExitStatus>;
-}
-
-impl RunCommand for Command {
-  fn exec_command(&mut self) -> std::io::Error {
-    let command_call = self.get_command();
-    trace!("Executing {command_call}");
-    self.exec()
-  }
-
-  fn run_command(&mut self) -> color_eyre::Result<()> {
-    handle_output_result(self)?;
-    Ok(())
-  }
-
-  fn run_command_with_output(&mut self) -> color_eyre::Result<Output> { handle_output_result(self) }
-
-  fn status_command(&mut self) -> color_eyre::Result<ExitStatus> {
-    let command_call = self.get_command();
-    debug!("Running {command_call}");
-    self.status().map_err(|e| e.into())
-  }
-}
-
-fn handle_output_result(command: &mut Command) -> color_eyre::Result<Output> {
-  let command_call = command.get_command();
-  let output = command.output();
-
-  match output {
-    Ok(output) => {
-      let code = output.status.code().ok_or(eyre!("unable to get status code for command output"))?;
-      let status = print_bool!(output.status.success(), code, code);
-      if !output.status.success() {
-        error!("{command_call} -> {status}");
-        error!("stdout: {stdout}", stdout = String::from_utf8_lossy(&output.stdout));
-        error!("stderr: {stderr}", stderr = String::from_utf8_lossy(&output.stderr));
-      } else {
-        trace!("{command_call} -> {status}");
-      }
-
-      Ok(output)
-    },
-    Err(e) => {
-      error!("an error occurred while calling {command_call}");
-      Err(e.into())
-    },
-  }
-}
-
 /// Get the current hostname
 pub fn get_local_hostname() -> Result<String> {
-  info!("Getting local hostname");
-  let hostname = gethostname::gethostname().into_string().map_err(|e| eyre!("unable to get hostname: {e:?}"));
+  let hostname = gethostname::gethostname()
+    .into_string()
+    .map_err(|e| eyre!("unable to get hostname: {e:?}"))
+    .inspect(|hostname| info!("Getting local hostname {}", hostname.purple().bold()));
 
   debug!("Local hostname: {hostname:?}");
   hostname
@@ -99,9 +29,10 @@ where
   S: AsRef<OsStr>,
 {
   debug!("checking if the nix command supports flakes");
-  Command::new("nix").args(flake_flags).arg("flake").arg("metadata").arg("--version").run_command().is_ok()
+  Exec::cmd("nix").args(flake_flags).arg("flake").arg("metadata").arg("--version").join().is_ok_and(|s| s.success())
 }
 
+#[deprecated]
 pub fn get_flake_metadata<Flake, Cmd, FlakeFlags, MetadataFlags>(
   flake: Flake, cmd: Cmd, flake_flags: &[FlakeFlags], extra_metadata_flags: &[MetadataFlags],
 ) -> Result<Value>
@@ -112,7 +43,7 @@ where
   MetadataFlags: AsRef<OsStr> + std::fmt::Debug,
 {
   debug!("Getting flake metadata {flake:?} {cmd:?} {extra_metadata_flags:?}");
-  let output = Command::new("nix")
+  let output = Exec::cmd("nix")
     .args(flake_flags)
     .arg("flake")
     .arg(cmd)
@@ -120,7 +51,7 @@ where
     .args(extra_metadata_flags)
     .arg("--")
     .arg(flake)
-    .run_command_with_output()?;
+    .capture()?;
 
   serde_json::from_slice(&output.stdout).map_err(|e| e.into())
 }
@@ -130,53 +61,49 @@ where
   File: AsRef<OsStr> + std::fmt::Debug,
 {
   debug!("Finding file {file:?}");
-  let output = Command::new("nix-instantiate").arg("--find-file").arg(file).run_command_with_output()?;
+  let output = Exec::cmd("nix-instantiate").arg("--find-file").arg(file).capture()?;
   Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-pub fn exec_editor<File>(file: File)
+pub fn exec_editor<File>(file: File) -> Result<()>
 where
   File: AsRef<OsStr> + std::fmt::Debug,
 {
   let editor = env::var("EDITOR").unwrap_or("vi".to_string());
-  Command::new(editor).arg(file).exec_command();
+  Exec::cmd(editor).arg(file).join()?;
+  Ok(())
 }
 
-pub fn exec_nix_edit<Flake, FlakeAttr, FlakeFlags, FlakeFlagsItems>(
-  flake: Flake, flake_attr: FlakeAttr, flake_flags: FlakeFlags,
+#[deprecated]
+pub fn nix_edit<Flake, FlakeAttr, FlakeFlagsItems>(
+  flake: Flake, flake_attr: FlakeAttr, flake_flags: &[FlakeFlagsItems],
 ) -> Result<()>
 where
   Flake: AsRef<OsStr> + std::fmt::Display,
   FlakeAttr: AsRef<OsStr> + std::fmt::Display,
-  FlakeFlags: IntoIterator<Item = FlakeFlagsItems> + std::fmt::Debug,
-  FlakeFlagsItems: AsRef<OsStr>,
+  FlakeFlagsItems: AsRef<OsStr> + std::fmt::Debug,
 {
   debug!("editing flake {flake} {flake_attr} {flake_flags:?}");
-  Command::new("nix").args(flake_flags).arg("edit").arg("--").arg(format!("{}#{}", flake, flake_attr)).run_command()?;
+  Exec::cmd("nix").args(flake_flags).arg("edit").arg("--").arg(format!("{}#{}", flake, flake_attr)).join()?;
 
   Ok(())
 }
 
-pub fn nix_build<Exp, Attr, BuildFlags, OutDir, BuildFlagsItems>(
-  expression: Exp, attr: Attr, out_dir: OutDir, extra_build_flags: BuildFlags,
+#[deprecated]
+pub fn nix_build<Exp, Attr, OutDir, BuildFlagsItems>(
+  expression: Exp, attr: Attr, out_dir: OutDir, extra_build_flags: &[BuildFlagsItems],
 ) -> Result<String>
 where
   Exp: AsRef<OsStr> + std::fmt::Display,
   Attr: AsRef<OsStr> + std::fmt::Display,
   OutDir: AsRef<str> + std::fmt::Display,
-  BuildFlags: IntoIterator<Item = BuildFlagsItems> + std::fmt::Debug,
-  BuildFlagsItems: AsRef<OsStr>,
+  BuildFlagsItems: AsRef<OsStr> + std::fmt::Debug,
 {
   debug!("Building the system configuration {expression} {attr} {extra_build_flags:?}");
 
   let args = vec!["--out-link", out_dir.as_ref()];
-  let output = Command::new("nix-build")
-    .arg(expression)
-    .args(extra_build_flags)
-    .args(&args)
-    .arg("-A")
-    .arg(attr)
-    .run_command_with_output()?;
+  let output =
+    Exec::cmd("nix-build").arg(expression).args(extra_build_flags).args(&args).arg("-A").arg(attr).capture()?;
   Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
@@ -219,23 +146,27 @@ where
     debug!("Cmd: {:?}", cmd);
     let result = cmd.join()?;
     debug!("result: {:?}", result);
+    if result.success() {
+      Exec::cmd("ls").args(&["-l", out_dir.as_ref()]).join()?;
+      debug!("nvd diff {DEFAULT_PROFILE} {out_dir}");
+      Exec::cmd("nvd").args(&["diff", DEFAULT_PROFILE, out_dir.as_ref()]).join()?;
 
-    Exec::cmd("ls").args(&["-l", out_dir.as_ref()]).join()?;
-    debug!("nvd diff {DEFAULT_PROFILE} {out_dir}");
-    Exec::cmd("nvd").args(&["diff", DEFAULT_PROFILE, out_dir.as_ref()]).join()?;
-
-    Ok(out_dir.into())
+      Ok(out_dir.into())
+    } else {
+      bail!("Failed to build the system configuration")
+    }
   } else {
-    let output = Command::new("nix")
+    let output = Exec::cmd("nix")
       .args(flake_flags)
       .arg("build")
       .arg("--json")
       .args(extra_build_flags)
       .arg("--")
       .arg(format!("{}#{}.system", flake, flake_attr))
-      .run_command_with_output()?;
+      .stdout(Redirection::None)
+      .capture()?;
 
-    if output.status.success() {
+    if output.exit_status.success() {
       let json_output: Value = serde_json::from_slice(&output.stdout)?;
 
       json_output[0]["outputs"]["out"].as_str().map(|a| a.to_string()).ok_or(eyre!("unable to get output"))
@@ -259,16 +190,15 @@ pub fn is_read_only<P: AsRef<Path> + std::fmt::Display>(path: &P) -> Result<bool
   Ok(is_read_only)
 }
 
-pub fn sudo_nix_env_profile<Profile, ExtraProfileFlags, ExtraProfileFlagsItems>(
-  profile: Profile, extra_profile_flags: ExtraProfileFlags,
+pub fn sudo_nix_env_profile<Profile, ExtraProfileFlagsItems>(
+  profile: Profile, extra_profile_flags: &[ExtraProfileFlagsItems],
 ) -> Result<()>
 where
   Profile: AsRef<OsStr> + std::fmt::Display,
-  ExtraProfileFlags: IntoIterator<Item = ExtraProfileFlagsItems> + std::fmt::Debug,
-  ExtraProfileFlagsItems: AsRef<OsStr>,
+  ExtraProfileFlagsItems: AsRef<OsStr> + std::fmt::Debug,
 {
-  info!("Running sudo nix-env -p {profile} {extra_profile_flags:?}");
-  let status = Command::new("sudo").arg("nix-env").arg("-p").arg(profile).args(extra_profile_flags).status_command()?;
+  info!("Running {}", format!("sudo nix-env -p {} {:?}", profile.yellow(), extra_profile_flags.blue()));
+  let status = Exec::cmd("sudo").arg("nix-env").arg("-p").arg(profile).args(extra_profile_flags).join()?;
   if status.success() {
     Ok(())
   } else {
@@ -276,16 +206,15 @@ where
   }
 }
 
-pub fn nix_env_profile<Profile, ExtraProfileFlags, ExtraProfileFlagsItems>(
-  profile: Profile, extra_profile_flags: ExtraProfileFlags,
+pub fn nix_env_profile<Profile, ExtraProfileFlagsItems>(
+  profile: Profile, extra_profile_flags: &[ExtraProfileFlagsItems],
 ) -> Result<()>
 where
   Profile: AsRef<OsStr> + std::fmt::Display,
-  ExtraProfileFlags: IntoIterator<Item = ExtraProfileFlagsItems> + std::fmt::Debug,
-  ExtraProfileFlagsItems: AsRef<OsStr>,
+  ExtraProfileFlagsItems: AsRef<OsStr> + std::fmt::Debug,
 {
-  info!("Running nix-env -p {profile} {extra_profile_flags:?}");
-  let status = Command::new("nix-env").arg("-p").arg(profile).args(extra_profile_flags).status_command()?;
+  info!("Running {}", format!("nix-env -p {} {:?}", profile.yellow(), extra_profile_flags.blue()));
+  let status = Exec::cmd("nix-env").arg("-p").arg(profile).args(extra_profile_flags).join()?;
   if status.success() {
     Ok(())
   } else {
@@ -304,8 +233,7 @@ where
   SystemConfig: AsRef<OsStr> + std::fmt::Display,
 {
   info!("Running {}", format!("sudo nix-env -p {} --set {}", profile.yellow(), system_config.blue()));
-  let status =
-    Command::new("sudo").arg("nix-env").arg("-p").arg(profile).arg("--set").arg(system_config).status_command()?;
+  let status = Exec::cmd("sudo").arg("nix-env").arg("-p").arg(profile).arg("--set").arg(system_config).join()?;
 
   if status.success() {
     Ok(())
@@ -319,7 +247,8 @@ where
   Profile: AsRef<OsStr> + std::fmt::Display,
   SystemConfig: AsRef<OsStr> + std::fmt::Display,
 {
-  let status = Command::new("nix-env").arg("-p").arg(profile).arg("--set").arg(system_config).status_command()?;
+  info!("Running {}", format!("nix-env -p {} --set {}", profile.yellow(), system_config.blue()));
+  let status = Exec::cmd("nix-env").arg("-p").arg(profile).arg("--set").arg(system_config).join()?;
 
   if status.success() {
     Ok(())
@@ -332,7 +261,9 @@ pub fn exec_activate_user<SystemConfig>(system_config: &SystemConfig) -> Result<
 where
   SystemConfig: std::fmt::Display,
 {
-  let status = Command::new(format!("{}/activate-user", system_config)).status_command()?;
+  let command = format!("{}/activate-user", system_config);
+  info!("Running {}", command.yellow());
+  let status = Exec::cmd(command).join()?;
   if status.success() {
     Ok(())
   } else {
@@ -344,7 +275,9 @@ pub fn sudo_exec_activate<SystemConfig>(system_config: &SystemConfig) -> Result<
 where
   SystemConfig: std::fmt::Display,
 {
-  let status = Command::new("sudo").arg(format!("{}/activate", system_config)).status_command()?;
+  let command = format!("{}/activate", system_config);
+  info!("Running {}", format!("sudo {}", command.yellow()));
+  let status = Exec::cmd("sudo").arg(command).join()?;
 
   if status.success() {
     Ok(())
@@ -357,7 +290,9 @@ pub fn exec_activate<SystemConfig>(system_config: &SystemConfig) -> Result<()>
 where
   SystemConfig: std::fmt::Display,
 {
-  let status = Command::new(format!("{}/activate", system_config)).status_command()?;
+  let command = format!("{}/activate", system_config);
+  info!("Running {}", command.yellow());
+  let status = Exec::cmd(command).join()?;
 
   if status.success() {
     Ok(())

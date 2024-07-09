@@ -55,23 +55,37 @@ pub struct CompletionArgs {
 
 #[cfg(test)]
 mod tests {
+  use rstest::rstest;
+
   use super::*;
 
   const APP_NAME: &str = env!("CARGO_BIN_NAME");
-  #[test_log::test]
-  fn should_parse_cli_build() {
+  #[rstest]
+  #[case::build("build", Action::Build)]
+  #[case::check("check", Action::Check)]
+  #[case::switch("switch", Action::Switch)]
+  #[case::edit("edit", Action::Edit)]
+  #[case::activate("activate", Action::Activate)]
+  fn should_parse_cli_build(#[case] cmd: &str, #[case] action: Action) {
     use clap::Parser;
-    let cli = Cli::parse_from([APP_NAME, "build", "--verbose"]);
+    let cli = Cli::parse_from([APP_NAME, cmd, "--verbose"]);
     assert!(cli.verbose);
-    assert_eq!(cli.action, Some(Action::Build));
+    assert_eq!(cli.action, Some(action));
   }
 
-  #[test_log::test]
-  fn should_parse_cli() {
+  #[test]
+  fn should_parse_cli_list_generations() {
     use clap::Parser;
     let cli = Cli::parse_from([APP_NAME, "--list-generations"]);
-    assert!(!cli.verbose);
     assert_eq!(cli.action, None);
     assert!(cli.list_generations);
+  }
+
+  #[test]
+  fn should_parse_cli_rollback() {
+    use clap::Parser;
+    let cli = Cli::parse_from([APP_NAME, "--rollback"]);
+    assert_eq!(cli.action, None);
+    assert!(cli.rollback);
   }
 }
