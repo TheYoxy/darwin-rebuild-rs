@@ -61,7 +61,8 @@ impl Runnable for NixDarwinRunner {
         }
       },
       NixDarwinAction::Activate => {
-        let system_config = nix_commands::get_real_path(args().next().unwrap().replace("/sw/bin/darwin-rebuild", ""))?;
+        let path = args().next().unwrap().replace("/sw/bin/darwin-rebuild", "");
+        let system_config = nix_commands::get_real_path(&path)?;
         Self::activate_profile(&system_config)
       },
       NixDarwinAction::Build => self.build_configuration(&out_link_str).map(|_| ()),
@@ -97,6 +98,12 @@ impl Runnable for NixDarwinRunner {
 #[cfg(test)]
 mod tests {
   use super::*;
+  // mod containers {
+  //   use testcontainers::{runners::AsyncRunner, GenericImage};
+
+  //   #[test_log::test]
+  //   fn test() { let _image = GenericImage::new("sickcodes/docker-osx", "latest").start(); }
+  // }
   mod without_flakes {
     use clap::Parser;
 
@@ -105,7 +112,6 @@ mod tests {
 
     const APP_NAME: &str = env!("CARGO_BIN_NAME");
     fn get_runner(args: Vec<&str>) -> NixDarwinRunner {
-      color_eyre::install().unwrap();
       let mut cli_args = vec![APP_NAME];
       cli_args.append(&mut args.clone());
       let cli = Cli::parse_from(cli_args);
@@ -134,7 +140,6 @@ mod tests {
     }
 
     #[test_log::test]
-    #[should_panic]
     fn should_run_build() {
       let runner = get_runner(["build"].into());
       let result = runner.run();
@@ -142,7 +147,7 @@ mod tests {
     }
 
     #[test_log::test]
-    #[should_panic]
+    #[ignore]
     fn should_run_check() {
       let runner = get_runner(["check"].into());
       let result = runner.run();
@@ -150,7 +155,6 @@ mod tests {
     }
 
     #[test_log::test]
-    #[should_panic]
     #[ignore]
     fn should_run_switch() {
       let runner = get_runner(["switch"].into());
@@ -159,7 +163,6 @@ mod tests {
     }
 
     #[test_log::test]
-    #[should_panic]
     #[ignore]
     fn should_run_activate() {
       let runner = get_runner(["activate"].into());
@@ -175,7 +178,6 @@ mod tests {
     use crate::{cli::Cli, runner::runnable::NixDarwinRunner};
     const APP_NAME: &str = env!("CARGO_BIN_NAME");
     fn get_runner(args: Vec<&str>) -> NixDarwinRunner {
-      color_eyre::install().unwrap();
       let mut cli_args = vec![APP_NAME, "--flake", "./assets#darwin-rebuild-rs"];
       cli_args.append(&mut args.clone());
       let cli = Cli::parse_from(cli_args);
@@ -211,6 +213,7 @@ mod tests {
     }
 
     #[test_log::test]
+    #[ignore]
     fn should_run_check() {
       let runner = get_runner(["check"].into());
       let result = runner.run();

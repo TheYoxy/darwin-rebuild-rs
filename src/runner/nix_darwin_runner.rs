@@ -6,6 +6,7 @@ use color_eyre::{
 };
 use log::{debug, info};
 use regex::Regex;
+use subprocess::Exec;
 
 use crate::{
   cli::{Action, Cli},
@@ -86,7 +87,7 @@ impl NixDarwinRunner {
         let flake_value = format!("{}{}{}{}", scheme, authority, path, query_with_question);
         let cmd = if nix_commands::nix_command_supports_flake_metadata(flake_flags) { "metadata" } else { "info" };
 
-        let metadata = match nix_commands::get_flake_metadata(flake_value, cmd, flake_flags, extra_metadata_flags) {
+        let metadata = match nix_commands::get_flake_metadata(&flake_value, cmd, flake_flags, extra_metadata_flags) {
           Ok(e) => e,
           Err(err) => bail!("Failed to get flake metadata: {:?}", err),
         };
@@ -136,8 +137,8 @@ impl NixDarwinRunner {
     }
   }
 
-  pub(super) fn build_configuration<OutDir: AsRef<str> + Into<String> + Display>(
-    &self, out_dir: OutDir,
+  pub(super) fn build_configuration(
+    &self, out_dir: &(impl AsRef<str> + Into<String> + Display),
   ) -> color_eyre::Result<String> {
     if let Some(flake) = &self.flake {
       info!("building the system configuration from {}...", flake.yellow());
@@ -148,9 +149,7 @@ impl NixDarwinRunner {
     }
   }
 
-  pub(super) fn switch_profile<SystemConfig: AsRef<OsStr> + Display>(
-    &self, system_config: SystemConfig,
-  ) -> color_eyre::Result<()> {
+  pub(super) fn switch_profile(&self, system_config: &impl AsRef<OsStr>) -> color_eyre::Result<()> {
     let is_root_user = nix_commands::is_root_user()?;
     let is_read_only = nix_commands::is_read_only(&self.profile)?;
     debug!("Is root user: {} is ro {}", print_bool!(is_root_user), print_bool!(is_read_only));
@@ -164,25 +163,28 @@ impl NixDarwinRunner {
     Ok(())
   }
 
-  pub(super) fn run_profile<ExtraProfileFlagsItems>(
-    &self, extra_profile_flags: &[ExtraProfileFlagsItems],
-  ) -> color_eyre::Result<()>
-  where
-    ExtraProfileFlagsItems: AsRef<OsStr> + std::fmt::Debug,
-  {
+  pub(super) fn run_profile<ExtraProfileFlags: AsRef<OsStr>>(
+    &self, extra_profile_flags: &[ExtraProfileFlags],
+  ) -> color_eyre::Result<()> {
+    use crate::nix_commands::ExecTrace;
     let profile = &self.profile;
     let is_root_user = nix_commands::is_root_user()?;
     let is_read_only = nix_commands::is_read_only(&profile)?;
     debug!("Is root user: {} is ro {}", print_bool!(is_root_user), print_bool!(is_read_only));
-    if !is_root_user && is_read_only {
-      nix_commands::sudo_nix_env_profile(profile, extra_profile_flags)?;
+    let status = if !is_root_user && is_read_only {
+      Exec::cmd("sudo").arg("nix-env").arg("-p").arg(profile).args(extra_profile_flags).trace().join()
     } else {
-      nix_commands::nix_env_profile(profile, extra_profile_flags)?;
+      Exec::cmd("nix-env").arg("-p").arg(profile).args(extra_profile_flags).trace().join()
+    };
+
+    if status.is_ok_and(|status| status.success()) {
+      Ok(())
+    } else {
+      bail!("Failed to run sudo nix-env");
     }
-    Ok(())
   }
 
-  pub(super) fn activate_profile<SystemConfig: Display>(system_config: &SystemConfig) -> color_eyre::Result<()> {
+  pub(super) fn activate_profile(system_config: &impl std::fmt::Display) -> color_eyre::Result<()> {
     info!("activating user profile...");
     nix_commands::exec_activate_user(&system_config)?;
     if !nix_commands::is_root_user()? {
@@ -247,9 +249,10 @@ mod tests {
   #[should_panic]
   #[test_log::test]
   fn test_parse_profile_with_other() {
-    let profile = Some("other".to_string());
-    let result = NixDarwinRunner::parse_profile(&profile).unwrap();
-    assert_str_eq!(result, format!("/nix/var/nix/profiles/system-profiles/{}", profile.unwrap()));
+    let profile = "other".to_string();
+    let profile_opt = Some(profile.clone());
+    let result = NixDarwinRunner::parse_profile(&profile_opt).unwrap();
+    assert_str_eq!(result, format!("/nix/var/nix/profiles/system-profiles/{}", profile));
   }
 
   #[test_log::test]

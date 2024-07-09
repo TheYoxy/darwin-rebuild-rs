@@ -14,7 +14,7 @@ use crate::{print_bool, DEFAULT_PROFILE};
 
 type Result<T> = color_eyre::Result<T>;
 
-trait ExecTrace {
+pub(crate) trait ExecTrace {
   fn trace(self) -> Self;
 }
 impl ExecTrace for Exec {
@@ -56,16 +56,15 @@ where
     .is_ok_and(|s| s.success())
 }
 
-pub fn get_flake_metadata<Flake, Cmd, FlakeFlags, MetadataFlags>(
-  flake: Flake, cmd: Cmd, flake_flags: &[FlakeFlags], extra_metadata_flags: &[MetadataFlags],
+pub fn get_flake_metadata<FlakeFlags, MetadataFlags>(
+  flake: &(impl AsRef<OsStr> + std::fmt::Display + ?Sized), cmd: &(impl AsRef<OsStr> + std::fmt::Display + ?Sized),
+  flake_flags: &[FlakeFlags], extra_metadata_flags: &[MetadataFlags],
 ) -> Result<Value>
 where
-  Flake: AsRef<OsStr> + std::fmt::Debug,
-  Cmd: AsRef<OsStr> + std::fmt::Debug,
   FlakeFlags: AsRef<OsStr> + std::fmt::Debug,
   MetadataFlags: AsRef<OsStr> + std::fmt::Debug,
 {
-  debug!("Getting flake metadata {flake:?} {cmd:?} {extra_metadata_flags:?}");
+  debug!("Getting flake metadata {} {} {:?}", flake.cyan(), cmd.yellow(), extra_metadata_flags.yellow());
   let output = Exec::cmd("nix")
     .args(flake_flags)
     .arg("flake")
@@ -80,19 +79,13 @@ where
   serde_json::from_slice(&output.stdout).map_err(|e| eyre!("unable to parse flake metadata").with_error(|| e))
 }
 
-pub fn nix_instantiate_find_file<File>(file: File) -> Result<String>
-where
-  File: AsRef<OsStr> + std::fmt::Debug,
-{
+pub fn nix_instantiate_find_file(file: &(impl AsRef<OsStr> + std::fmt::Debug + ?Sized)) -> Result<String> {
   debug!("Finding file {file:?}");
   let output = Exec::cmd("nix-instantiate").arg("--find-file").arg(file).trace().capture()?;
   Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-pub fn exec_editor<File>(file: File) -> Result<()>
-where
-  File: AsRef<OsStr> + std::fmt::Debug + std::marker::Copy,
-{
+pub fn exec_editor(file: &impl AsRef<OsStr>) -> Result<()> {
   #[cfg(test)]
   {
     Exec::cmd("nvim")
@@ -112,12 +105,11 @@ where
   }
 }
 
-pub fn nix_edit<Flake, FlakeAttr, FlakeFlagsItems>(
-  flake: Flake, flake_attr: FlakeAttr, flake_flags: &[FlakeFlagsItems],
+pub fn nix_edit<FlakeFlagsItems>(
+  flake: &(impl AsRef<OsStr> + std::fmt::Display), flake_attr: &(impl AsRef<OsStr> + std::fmt::Display),
+  flake_flags: &[FlakeFlagsItems],
 ) -> Result<()>
 where
-  Flake: AsRef<OsStr> + std::fmt::Display,
-  FlakeAttr: AsRef<OsStr> + std::fmt::Display,
   FlakeFlagsItems: AsRef<OsStr> + std::fmt::Debug,
 {
   debug!("editing flake {flake} {flake_attr} {flake_flags:?}");
@@ -126,16 +118,15 @@ where
   Ok(())
 }
 
-pub fn nix_build<Exp, Attr, OutDir, BuildFlagsItems>(
-  expression: Exp, attr: Attr, out_dir: OutDir, extra_build_flags: &[BuildFlagsItems],
+pub fn nix_build<BuildFlagsItems>(
+  expression: &(impl AsRef<OsStr> + std::fmt::Display + ?Sized),
+  attr: &(impl AsRef<OsStr> + std::fmt::Display + ?Sized), out_dir: &(impl AsRef<str> + std::fmt::Display),
+  extra_build_flags: &[BuildFlagsItems],
 ) -> Result<String>
 where
-  Exp: AsRef<OsStr> + std::fmt::Display,
-  Attr: AsRef<OsStr> + std::fmt::Display,
-  OutDir: AsRef<str> + std::fmt::Display,
   BuildFlagsItems: AsRef<OsStr> + std::fmt::Debug,
 {
-  debug!("Building the system configuration {expression} {attr} {extra_build_flags:?}");
+  debug!("Building the system configuration {} {} {:?}", expression.blue(), attr.yellow(), extra_build_flags.blue());
 
   let args = vec!["--out-link", out_dir.as_ref()];
   let output =
@@ -148,15 +139,12 @@ where
   }
 }
 
-pub fn nix_flake_build<Flake, FlakeAttr, FlakeFlagsItems, OutDir, BuildFlagsItems>(
-  flake: Flake, flake_attr: FlakeAttr, flake_flags: &[FlakeFlagsItems], out_dir: OutDir,
-  extra_build_flags: &[BuildFlagsItems],
+pub fn nix_flake_build<Attr, BuildFlagsItems>(
+  flake: &(impl AsRef<OsStr> + std::fmt::Display), flake_attr: &(impl AsRef<OsStr> + std::fmt::Display),
+  flake_flags: &[Attr], out_dir: &(impl AsRef<str> + std::fmt::Display), extra_build_flags: &[BuildFlagsItems],
 ) -> Result<String>
 where
-  Flake: AsRef<OsStr> + std::fmt::Display,
-  FlakeAttr: AsRef<OsStr> + std::fmt::Display,
-  OutDir: AsRef<str> + std::fmt::Display + Into<String>,
-  FlakeFlagsItems: AsRef<OsStr> + std::fmt::Debug,
+  Attr: AsRef<OsStr> + std::fmt::Debug,
   BuildFlagsItems: AsRef<OsStr> + std::fmt::Debug,
 {
   debug!(
@@ -166,6 +154,7 @@ where
     flake_flags.cyan(),
     extra_build_flags.blue()
   );
+
   let nom = true;
   if nom {
     let args = vec!["--out-link", out_dir.as_ref()];
@@ -175,7 +164,7 @@ where
         .arg("build")
         .args(&["--log-format", "internal-json", "-v"])
         .args(&args)
-        .args(extra_build_flags)
+        .args(&extra_build_flags)
         .arg("--")
         .arg(format!("{}#{}.system", flake, flake_attr))
         .trace()
@@ -191,7 +180,7 @@ where
       debug!("build succedded, printing diff");
       Exec::cmd("nvd").args(&["diff", DEFAULT_PROFILE, out_dir.as_ref()]).trace().join()?;
 
-      Ok(out_dir.into())
+      Ok(out_dir.as_ref().to_string())
     } else {
       Err(eyre!("Failed to build the system configuration"))
     }
@@ -200,7 +189,7 @@ where
       .args(flake_flags)
       .arg("build")
       .arg("--json")
-      .args(extra_build_flags)
+      .args(&extra_build_flags)
       .arg("--")
       .arg(format!("{}#{}.system", flake, flake_attr))
       .stdout(Redirection::None)
@@ -240,8 +229,8 @@ pub fn sudo_nix_env_profile<Profile, ExtraProfileFlagsItems>(
   profile: Profile, extra_profile_flags: &[ExtraProfileFlagsItems],
 ) -> Result<()>
 where
-  Profile: AsRef<OsStr> + std::fmt::Display,
-  ExtraProfileFlagsItems: AsRef<OsStr> + std::fmt::Debug,
+  Profile: AsRef<OsStr>,
+  ExtraProfileFlagsItems: AsRef<OsStr>,
 {
   let status = Exec::cmd("sudo").arg("nix-env").arg("-p").arg(profile).args(extra_profile_flags).trace().join()?;
   if status.success() {
@@ -251,13 +240,7 @@ where
   }
 }
 
-pub fn nix_env_profile<Profile, ExtraProfileFlagsItems>(
-  profile: Profile, extra_profile_flags: &[ExtraProfileFlagsItems],
-) -> Result<()>
-where
-  Profile: AsRef<OsStr> + std::fmt::Display,
-  ExtraProfileFlagsItems: AsRef<OsStr> + std::fmt::Debug,
-{
+pub fn nix_env_profile(profile: &impl AsRef<OsStr>, extra_profile_flags: &[&impl AsRef<OsStr>]) -> Result<()> {
   let status = Exec::cmd("nix-env").arg("-p").arg(profile).args(extra_profile_flags).trace().join()?;
   if status.success() {
     Ok(())
@@ -266,29 +249,19 @@ where
   }
 }
 
-pub fn get_real_path<S: AsRef<Path> + std::fmt::Debug>(path: S) -> Result<String> {
+pub fn get_real_path(path: &(impl AsRef<Path> + std::fmt::Debug)) -> Result<String> {
   let canonical_path = std::fs::canonicalize(&path)?;
   canonical_path.to_str().ok_or(eyre!("unable to get the real path of {path:?}")).map(|e| e.to_string())
 }
 
-// #[cfg_attr(test, mockall::automock)]
 pub trait SetProfile {
-  fn sudo_nix_env_set_profile<Profile, SystemConfig>(profile: Profile, system_config: SystemConfig) -> Result<()>
-  where
-    Profile: AsRef<OsStr> + std::fmt::Display,
-    SystemConfig: AsRef<OsStr> + std::fmt::Display;
+  fn sudo_nix_env_set_profile(profile: &impl AsRef<OsStr>, system_config: &impl AsRef<OsStr>) -> Result<()>;
 
-  fn nix_env_set_profile<Profile, SystemConfig>(profile: Profile, system_config: SystemConfig) -> Result<()>
-  where
-    Profile: AsRef<OsStr> + std::fmt::Display,
-    SystemConfig: AsRef<OsStr> + std::fmt::Display;
+  fn nix_env_set_profile(profile: &impl AsRef<OsStr>, system_config: &impl AsRef<OsStr>) -> Result<()>;
 }
+
 impl SetProfile for () {
-  fn sudo_nix_env_set_profile<Profile, SystemConfig>(profile: Profile, system_config: SystemConfig) -> Result<()>
-  where
-    Profile: AsRef<OsStr> + std::fmt::Display,
-    SystemConfig: AsRef<OsStr> + std::fmt::Display,
-  {
+  fn sudo_nix_env_set_profile(profile: &impl AsRef<OsStr>, system_config: &impl AsRef<OsStr>) -> Result<()> {
     let status =
       Exec::cmd("sudo").arg("nix-env").arg("-p").arg(profile).arg("--set").arg(system_config).trace().join()?;
 
@@ -299,11 +272,7 @@ impl SetProfile for () {
     }
   }
 
-  fn nix_env_set_profile<Profile, SystemConfig>(profile: Profile, system_config: SystemConfig) -> Result<()>
-  where
-    Profile: AsRef<OsStr> + std::fmt::Display,
-    SystemConfig: AsRef<OsStr> + std::fmt::Display,
-  {
+  fn nix_env_set_profile(profile: &impl AsRef<OsStr>, system_config: &impl AsRef<OsStr>) -> Result<()> {
     let status = Exec::cmd("nix-env").arg("-p").arg(profile).arg("--set").arg(system_config).trace().join()?;
     if status.success() {
       Ok(())
