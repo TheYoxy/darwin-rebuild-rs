@@ -3,20 +3,37 @@ use std::{env, ffi::OsStr, fs, path::Path};
 use color_eyre::{
   eyre::{bail, eyre},
   owo_colors::OwoColorize,
+  Section, SectionExt,
 };
-use log::{debug, info};
+use log::{debug, info, trace};
 use serde_json::Value;
 use subprocess::{Exec, Redirection};
+use tracing::debug_span;
 
 use crate::{print_bool, DEFAULT_PROFILE};
 
 type Result<T> = color_eyre::Result<T>;
 
+trait ExecTrace {
+  fn trace(self) -> Self;
+}
+impl ExecTrace for Exec {
+  fn trace(self) -> Self {
+    let cmd = self.to_cmdline_lossy();
+    let split = cmd.split(' ').collect::<Vec<_>>();
+    let cmd = format!("{} {}", split[0].cyan(), split[1..].join(" ").yellow());
+    debug_span!("Running command {cmd}");
+    debug!("Running command {cmd}");
+
+    self
+  }
+}
+
 /// Get the current hostname
 pub fn get_local_hostname() -> Result<String> {
   let hostname = gethostname::gethostname()
     .into_string()
-    .map_err(|e| eyre!("unable to get hostname: {e:?}"))
+    .map_err(|e| eyre!("unable to get hostname").with_section(|| format!("{:?}", e)))
     .inspect(|hostname| info!("Getting local hostname {}", hostname.purple().bold()));
 
   debug!("Local hostname: {hostname:?}");
@@ -29,10 +46,16 @@ where
   S: AsRef<OsStr>,
 {
   debug!("checking if the nix command supports flakes");
-  Exec::cmd("nix").args(flake_flags).arg("flake").arg("metadata").arg("--version").join().is_ok_and(|s| s.success())
+  Exec::cmd("nix")
+    .args(flake_flags)
+    .arg("flake")
+    .arg("metadata")
+    .arg("--version")
+    .trace()
+    .join()
+    .is_ok_and(|s| s.success())
 }
 
-#[deprecated]
 pub fn get_flake_metadata<Flake, Cmd, FlakeFlags, MetadataFlags>(
   flake: Flake, cmd: Cmd, flake_flags: &[FlakeFlags], extra_metadata_flags: &[MetadataFlags],
 ) -> Result<Value>
@@ -51,9 +74,10 @@ where
     .args(extra_metadata_flags)
     .arg("--")
     .arg(flake)
+    .trace()
     .capture()?;
 
-  serde_json::from_slice(&output.stdout).map_err(|e| e.into())
+  serde_json::from_slice(&output.stdout).map_err(|e| eyre!("unable to parse flake metadata").with_error(|| e))
 }
 
 pub fn nix_instantiate_find_file<File>(file: File) -> Result<String>
@@ -61,20 +85,33 @@ where
   File: AsRef<OsStr> + std::fmt::Debug,
 {
   debug!("Finding file {file:?}");
-  let output = Exec::cmd("nix-instantiate").arg("--find-file").arg(file).capture()?;
+  let output = Exec::cmd("nix-instantiate").arg("--find-file").arg(file).trace().capture()?;
   Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
 pub fn exec_editor<File>(file: File) -> Result<()>
 where
-  File: AsRef<OsStr> + std::fmt::Debug,
+  File: AsRef<OsStr> + std::fmt::Debug + std::marker::Copy,
 {
-  let editor = env::var("EDITOR").unwrap_or("vi".to_string());
-  Exec::cmd(editor).arg(file).join()?;
-  Ok(())
+  #[cfg(test)]
+  {
+    Exec::cmd("nvim")
+      .arg("-v")
+      .arg(file)
+      .trace()
+      .stdout(subprocess::NullFile)
+      .stderr(subprocess::NullFile)
+      .join()
+      .map(|_| ())
+      .map_err(|e| eyre!("unable to open editor").with_error(|| e))
+  }
+  #[cfg(not(test))]
+  {
+    let editor = env::var("EDITOR").unwrap_or("vi".to_string());
+    Exec::cmd(editor).arg(file).trace().join().map(|_| ()).map_err(|e| eyre!("unable to open editor").with_error(|| e))
+  }
 }
 
-#[deprecated]
 pub fn nix_edit<Flake, FlakeAttr, FlakeFlagsItems>(
   flake: Flake, flake_attr: FlakeAttr, flake_flags: &[FlakeFlagsItems],
 ) -> Result<()>
@@ -84,12 +121,11 @@ where
   FlakeFlagsItems: AsRef<OsStr> + std::fmt::Debug,
 {
   debug!("editing flake {flake} {flake_attr} {flake_flags:?}");
-  Exec::cmd("nix").args(flake_flags).arg("edit").arg("--").arg(format!("{}#{}", flake, flake_attr)).join()?;
+  Exec::cmd("nix").args(flake_flags).arg("edit").arg("--").arg(format!("{}#{}", flake, flake_attr)).trace().join()?;
 
   Ok(())
 }
 
-#[deprecated]
 pub fn nix_build<Exp, Attr, OutDir, BuildFlagsItems>(
   expression: Exp, attr: Attr, out_dir: OutDir, extra_build_flags: &[BuildFlagsItems],
 ) -> Result<String>
@@ -104,7 +140,12 @@ where
   let args = vec!["--out-link", out_dir.as_ref()];
   let output =
     Exec::cmd("nix-build").arg(expression).args(extra_build_flags).args(&args).arg("-A").arg(attr).capture()?;
-  Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+  let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+  if output.exit_status.success() {
+    Ok(stdout)
+  } else {
+    Err(eyre!("Failed to build the system configuration").with_section(|| stdout))
+  }
 }
 
 pub fn nix_flake_build<Flake, FlakeAttr, FlakeFlagsItems, OutDir, BuildFlagsItems>(
@@ -137,23 +178,22 @@ where
         .args(extra_build_flags)
         .arg("--")
         .arg(format!("{}#{}.system", flake, flake_attr))
+        .trace()
         .stdout(Redirection::Pipe)
         .stderr(Redirection::Merge)
         | Exec::cmd("nom").args(&["--json"])
     }
     .stdout(Redirection::None);
 
-    debug!("Cmd: {:?}", cmd);
     let result = cmd.join()?;
-    debug!("result: {:?}", result);
+    trace!("Result: {:?}", result.yellow());
     if result.success() {
-      Exec::cmd("ls").args(&["-l", out_dir.as_ref()]).join()?;
-      debug!("nvd diff {DEFAULT_PROFILE} {out_dir}");
-      Exec::cmd("nvd").args(&["diff", DEFAULT_PROFILE, out_dir.as_ref()]).join()?;
+      debug!("build succedded, printing diff");
+      Exec::cmd("nvd").args(&["diff", DEFAULT_PROFILE, out_dir.as_ref()]).trace().join()?;
 
       Ok(out_dir.into())
     } else {
-      bail!("Failed to build the system configuration")
+      Err(eyre!("Failed to build the system configuration"))
     }
   } else {
     let output = Exec::cmd("nix")
@@ -169,17 +209,23 @@ where
     if output.exit_status.success() {
       let json_output: Value = serde_json::from_slice(&output.stdout)?;
 
-      json_output[0]["outputs"]["out"].as_str().map(|a| a.to_string()).ok_or(eyre!("unable to get output"))
+      json_output[0]["outputs"]["out"].as_str().map(|a| a.to_string()).ok_or(
+        eyre!("unable to get output").with_section(|| {
+          let stdout = String::from_utf8_lossy(&output.stdout);
+          stdout.to_string().header("stdout: ")
+        }),
+      )
     } else {
-      bail!("Failed to run nix build: {}", String::from_utf8_lossy(&output.stderr).trim())
+      let stderr = String::from_utf8_lossy(&output.stderr);
+      Err(eyre!("Failed to run nix build")).with_section(|| stderr.to_string().header("stderr: "))
     }
   }
 }
-
 pub fn is_root_user() -> Result<bool> {
   const USERNAME: &str = "root";
   debug!("Checking if the user is {}", USERNAME.bold().yellow());
-  Ok(env::var("USER").map_err(|e| eyre!("Unable to get user from env variables {}", e.red()))? == USERNAME)
+  let user = env::var("USER").map_err(|e| eyre!("Unable to get user from env variables").with_error(|| e))?;
+  Ok(user == USERNAME)
 }
 
 pub fn is_read_only<P: AsRef<Path> + std::fmt::Display>(path: &P) -> Result<bool> {
@@ -197,8 +243,7 @@ where
   Profile: AsRef<OsStr> + std::fmt::Display,
   ExtraProfileFlagsItems: AsRef<OsStr> + std::fmt::Debug,
 {
-  info!("Running {}", format!("sudo nix-env -p {} {:?}", profile.yellow(), extra_profile_flags.blue()));
-  let status = Exec::cmd("sudo").arg("nix-env").arg("-p").arg(profile).args(extra_profile_flags).join()?;
+  let status = Exec::cmd("sudo").arg("nix-env").arg("-p").arg(profile).args(extra_profile_flags).trace().join()?;
   if status.success() {
     Ok(())
   } else {
@@ -213,8 +258,7 @@ where
   Profile: AsRef<OsStr> + std::fmt::Display,
   ExtraProfileFlagsItems: AsRef<OsStr> + std::fmt::Debug,
 {
-  info!("Running {}", format!("nix-env -p {} {:?}", profile.yellow(), extra_profile_flags.blue()));
-  let status = Exec::cmd("nix-env").arg("-p").arg(profile).args(extra_profile_flags).join()?;
+  let status = Exec::cmd("nix-env").arg("-p").arg(profile).args(extra_profile_flags).trace().join()?;
   if status.success() {
     Ok(())
   } else {
@@ -227,33 +271,45 @@ pub fn get_real_path<S: AsRef<Path> + std::fmt::Debug>(path: S) -> Result<String
   canonical_path.to_str().ok_or(eyre!("unable to get the real path of {path:?}")).map(|e| e.to_string())
 }
 
-pub fn sudo_nix_env_set_profile<Profile, SystemConfig>(profile: Profile, system_config: SystemConfig) -> Result<()>
-where
-  Profile: AsRef<OsStr> + std::fmt::Display,
-  SystemConfig: AsRef<OsStr> + std::fmt::Display,
-{
-  info!("Running {}", format!("sudo nix-env -p {} --set {}", profile.yellow(), system_config.blue()));
-  let status = Exec::cmd("sudo").arg("nix-env").arg("-p").arg(profile).arg("--set").arg(system_config).join()?;
+// #[cfg_attr(test, mockall::automock)]
+pub trait SetProfile {
+  fn sudo_nix_env_set_profile<Profile, SystemConfig>(profile: Profile, system_config: SystemConfig) -> Result<()>
+  where
+    Profile: AsRef<OsStr> + std::fmt::Display,
+    SystemConfig: AsRef<OsStr> + std::fmt::Display;
 
-  if status.success() {
-    Ok(())
-  } else {
-    bail!("Failed to run sudo nix-env --set");
-  }
+  fn nix_env_set_profile<Profile, SystemConfig>(profile: Profile, system_config: SystemConfig) -> Result<()>
+  where
+    Profile: AsRef<OsStr> + std::fmt::Display,
+    SystemConfig: AsRef<OsStr> + std::fmt::Display;
 }
+impl SetProfile for () {
+  fn sudo_nix_env_set_profile<Profile, SystemConfig>(profile: Profile, system_config: SystemConfig) -> Result<()>
+  where
+    Profile: AsRef<OsStr> + std::fmt::Display,
+    SystemConfig: AsRef<OsStr> + std::fmt::Display,
+  {
+    let status =
+      Exec::cmd("sudo").arg("nix-env").arg("-p").arg(profile).arg("--set").arg(system_config).trace().join()?;
 
-pub fn nix_env_set_profile<Profile, SystemConfig>(profile: Profile, system_config: SystemConfig) -> Result<()>
-where
-  Profile: AsRef<OsStr> + std::fmt::Display,
-  SystemConfig: AsRef<OsStr> + std::fmt::Display,
-{
-  info!("Running {}", format!("nix-env -p {} --set {}", profile.yellow(), system_config.blue()));
-  let status = Exec::cmd("nix-env").arg("-p").arg(profile).arg("--set").arg(system_config).join()?;
+    if status.success() {
+      Ok(())
+    } else {
+      bail!("Failed to run sudo nix-env --set");
+    }
+  }
 
-  if status.success() {
-    Ok(())
-  } else {
-    bail!("Failed to run nix-env --set");
+  fn nix_env_set_profile<Profile, SystemConfig>(profile: Profile, system_config: SystemConfig) -> Result<()>
+  where
+    Profile: AsRef<OsStr> + std::fmt::Display,
+    SystemConfig: AsRef<OsStr> + std::fmt::Display,
+  {
+    let status = Exec::cmd("nix-env").arg("-p").arg(profile).arg("--set").arg(system_config).trace().join()?;
+    if status.success() {
+      Ok(())
+    } else {
+      bail!("Failed to run nix-env --set");
+    }
   }
 }
 
@@ -262,8 +318,7 @@ where
   SystemConfig: std::fmt::Display,
 {
   let command = format!("{}/activate-user", system_config);
-  info!("Running {}", command.yellow());
-  let status = Exec::cmd(command).join()?;
+  let status = Exec::cmd(command).trace().join()?;
   if status.success() {
     Ok(())
   } else {
@@ -276,8 +331,7 @@ where
   SystemConfig: std::fmt::Display,
 {
   let command = format!("{}/activate", system_config);
-  info!("Running {}", format!("sudo {}", command.yellow()));
-  let status = Exec::cmd("sudo").arg(command).join()?;
+  let status = Exec::cmd("sudo").arg(command).trace().join()?;
 
   if status.success() {
     Ok(())
@@ -292,7 +346,7 @@ where
 {
   let command = format!("{}/activate", system_config);
   info!("Running {}", command.yellow());
-  let status = Exec::cmd(command).join()?;
+  let status = Exec::cmd(command).trace().join()?;
 
   if status.success() {
     Ok(())

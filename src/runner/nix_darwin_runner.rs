@@ -1,9 +1,4 @@
-use std::{
-  env,
-  ffi::OsStr,
-  fmt::{Debug, Display},
-  path::Path,
-};
+use std::{env, ffi::OsStr, fmt::Display, path::Path};
 
 use color_eyre::{
   eyre::{bail, eyre},
@@ -14,7 +9,8 @@ use regex::Regex;
 
 use crate::{
   cli::{Action, Cli},
-  nix_commands, print_bool, DEFAULT_PROFILE,
+  nix_commands::{self, SetProfile},
+  print_bool, DEFAULT_PROFILE,
 };
 
 pub struct NixDarwinRunner {
@@ -33,11 +29,11 @@ impl NixDarwinRunner {
     let extra_metadata_flags = vec![];
     let extra_build_flags = vec![];
     let profile = Self::parse_profile(&args.profile_name)?;
-    info!("Current profile: {}", profile.yellow());
+    debug!("Current profile: {}", profile.yellow());
 
     let flake_flags = vec!["--extra-experimental-features".to_string(), "nix-command flakes".to_string()];
-
     let (flake, flake_attr) = Self::parse_flake(args, &flake_flags, &extra_metadata_flags)?;
+
     Ok(Self {
       action: args.action,
       rollback: args.rollback,
@@ -52,19 +48,19 @@ impl NixDarwinRunner {
 
   fn parse_profile(profile_name: &Option<String>) -> color_eyre::Result<String> {
     fn default_value() -> String { env::var("profile").unwrap_or(DEFAULT_PROFILE.to_string()) }
-    if let Some(profile_name) = &profile_name {
-      if profile_name != "system" {
+    debug!("looking for profile... {:?}", profile_name.yellow());
+    let result = match &profile_name {
+      Some(profile_name) if profile_name != "system" => {
+        debug!("looking for custom profile {}", profile_name.yellow());
         let profile = format!("/nix/var/nix/profiles/system-profiles/{}", profile_name);
         let path =
           Path::new(&profile).parent().ok_or(eyre!("unable to get parent directory of {}", profile.yellow()))?;
         std::fs::create_dir_all(path)?;
         Ok(profile)
-      } else {
-        Ok(default_value())
-      }
-    } else {
-      Ok(default_value())
-    }
+      },
+      _ => Ok(default_value()),
+    };
+    result.and_then(|e| if e.is_empty() { bail!("profile is empty") } else { Ok(e) })
   }
 
   fn parse_flake(
@@ -97,12 +93,8 @@ impl NixDarwinRunner {
         let url = &metadata["url"];
         debug!("Url {:?}", url.blue());
         let flake_value = match url {
-          serde_json::Value::String(e) => {
-            if e.is_empty() {
-              bail!("flake url is empty");
-            }
-            e
-          },
+          serde_json::Value::String(e) if e.is_empty() => bail!("flake url is empty"),
+          serde_json::Value::String(e) if !e.is_empty() => e,
           _ => bail!("flake url is not a string"),
         }
         .to_owned();
@@ -164,10 +156,10 @@ impl NixDarwinRunner {
     debug!("Is root user: {} is ro {}", print_bool!(is_root_user), print_bool!(is_read_only));
     if !is_root_user && is_read_only {
       info!("setting the profile as root...");
-      nix_commands::sudo_nix_env_set_profile(&self.profile, &system_config)?;
+      <() as SetProfile>::sudo_nix_env_set_profile(&self.profile, &system_config)?;
     } else {
       info!("setting the profile...");
-      nix_commands::nix_env_set_profile(&self.profile, &system_config)?;
+      <() as SetProfile>::nix_env_set_profile(&self.profile, &system_config)?;
     }
     Ok(())
   }
